@@ -20,11 +20,20 @@ set(PROJECT_SOURCES source/main.cc source/gl_utils.cc)
 
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} ${GLAD_SOURCES})
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
-target_include_directories(${PROJECT_NAME} PRIVATE 
-  "${CMAKE_SOURCE_DIR}/dependencies/stb"
-  "${CMAKE_SOURCE_DIR}/dependencies/glad/include"
-  )
+set_property(TARGET ${PROJECT_NAME} PROPERTY C_STANDARD 11)
+target_include_directories(
+  ${PROJECT_NAME}
+  PRIVATE "${CMAKE_SOURCE_DIR}/dependencies/stb"
+          "${CMAKE_SOURCE_DIR}/dependencies/glad/include"
+          "${CMAKE_SOURCE_DIR}/dependencies/scope_guard")
 
 # Add dependencies
 add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm PNG::PNG)
-target_link_libraries(${PROJECT_NAME} glfw fmt-header-only opengl32 CLI11 glm PNG::PNG)
+target_link_libraries(
+  ${PROJECT_NAME}
+  glfw
+  fmt-header-only
+  opengl32
+  CLI11
+  glm
+  PNG::PNG)
