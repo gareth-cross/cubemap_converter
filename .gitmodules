@@ -10,3 +10,6 @@
 [submodule "dependencies/cli11"]
 	path = dependencies/cli11
 	url = https://github.com/CLIUtils/CLI11.git
+[submodule "dependencies/glm"]
+	path = dependencies/glm
+	url = https://github.com/g-truc/glm.git
