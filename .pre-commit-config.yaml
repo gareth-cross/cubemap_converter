@@ -1,0 +1,15 @@
+# Don't run pre-commit on third party
+exclude: "^\
+  (dependencies/.*)\
+  "
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v2.3.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v15.0.7
+    hooks:
+      - id: clang-format
