@@ -23,5 +23,5 @@ target_include_directories(${PROJECT_NAME} PRIVATE
   )
 
 # Add dependencies
-add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11)
-target_link_libraries(${PROJECT_NAME} glfw fmt-header-only opengl32 CLI11)
+add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm)
+target_link_libraries(${PROJECT_NAME} glfw fmt-header-only opengl32 CLI11 glm)
