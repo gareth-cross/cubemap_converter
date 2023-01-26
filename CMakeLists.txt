@@ -12,6 +12,9 @@ message(STATUS "C++ compiler: ${CMAKE_CXX_COMPILER}")
 # Add third party code
 add_subdirectory(dependencies)
 
+# Find lib png:
+find_package(PNG REQUIRED)
+
 set(GLAD_SOURCES dependencies/glad/src/gl.c)
 set(PROJECT_SOURCES source/main.cc source/gl_utils.cc)
 
@@ -23,5 +26,5 @@ target_include_directories(${PROJECT_NAME} PRIVATE
   )
 
 # Add dependencies
-add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm)
-target_link_libraries(${PROJECT_NAME} glfw fmt-header-only opengl32 CLI11 glm)
+add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm PNG::PNG)
+target_link_libraries(${PROJECT_NAME} glfw fmt-header-only opengl32 CLI11 glm PNG::PNG)
