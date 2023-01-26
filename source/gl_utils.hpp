@@ -5,6 +5,10 @@
 
 #include "assertions.hpp"
 
+namespace images {
+struct SimpleImage;
+}
+
 namespace gl_utils {
 
 // Simple "unique_ptr" imitation for use w/ OpenGL handles.
@@ -61,9 +65,27 @@ struct ShaderProgram : public OpenGLHandle {
     glUniformMatrix4fv(uniform, 1, GL_FALSE, &matrix[0][0]);
     glUseProgram(0);
   }
+
+  // Set a scalar uniform:
+  void SetUniformVec2(const std::string_view name, const glm::vec2 value) const {
+    glUseProgram(Handle());
+    const GLint uniform = glGetUniformLocation(Handle(), name.data());
+    ASSERT(uniform != -1, "Failed to find uniform: {}", name);
+    glUniform2f(uniform, value.x, value.y);
+    glUseProgram(0);
+  }
 };
 
 // Compile and link a shader.
 ShaderProgram CompileShaderProgram(std::string_view vertex_source, std::string_view fragment_source);
+
+// Wrapper for texture.
+struct Texture2D : public OpenGLHandle {
+  Texture2D();
+  explicit Texture2D(const struct images::SimpleImage& image);
+
+  // Fill the texture from an image.
+  void Fill(const struct images::SimpleImage& image);
+};
 
 }  // namespace gl_utils

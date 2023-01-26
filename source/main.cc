@@ -27,19 +27,34 @@ static void glfw_error_callback(int error, const char* description) {
 struct ProgramArgs {
   std::string input_path;
   std::size_t index;
+  std::string table_path;
+  int table_width;
+  int table_height;
 };
+
+template <typename... Ts>
+auto AddOptionChecked(CLI::App& app, Ts&&... args) {
+  const auto result = app.add_option(std::forward<Ts>(args)...);
+  ASSERT(result, "Failed to add argument for some reason");
+  return result;
+}
 
 // Parse program arts, or fail and return exit code.
 std::variant<ProgramArgs, int> ParseProgramArgs(int argc, char** argv) {
   CLI::App app{"Cubemap converter"};
   ProgramArgs args{};
-  app.add_option("-i,--input-path", args.input_path, "Path to the input dataset.")->required();
-  app.add_option("--index", args.index, "Index of the image to display.")->required();
-
+  AddOptionChecked(app, "-i,--input-path", args.input_path, "Path to the input dataset.")->required();
+  AddOptionChecked(app, "--index", args.index, "Index of the image to display.")->required();
+  AddOptionChecked(app, "-t,--remap-table", args.table_path, "Path to the remap table.")->required();
+  AddOptionChecked(app, "-w,--width", args.table_width, "Width of the native image.")->required();
+  AddOptionChecked(app, "-h,--height", args.table_height, "Height of the native image.")->required();
   try {
     app.parse(argc, argv);
   } catch (const CLI::ParseError& e) {
     return app.exit(e);
+  } catch (const std::exception& e) {
+    fmt::print("Some other exception: {}", e.what());
+    return 1;
   }
   return args;
 }
@@ -90,9 +105,37 @@ in vec2 TexCoords;
 // Texture we are going to display.
 uniform sampler2D image;
 
+// Viewport dims in pixels.
+uniform vec2 viewport_dims;
+
+// Image dims in pixels.
+uniform vec2 image_dims;
+
 void main() {
-  vec3 rgb = texture(image, TexCoords).xyz;
-  FragColor = vec4(rgb.x, rgb.y, rgb.z, 1.0f);
+  // determine scale factor to fit the image in the viewport
+  float scale_factor =
+      min(viewport_dims.x / image_dims.x, viewport_dims.y / image_dims.y);
+
+  // scale image dimensions to fit
+  vec2 scaled_image_dims = image_dims * scale_factor;
+
+  // compute offset to center:
+  vec2 image_origin = (viewport_dims - scaled_image_dims) / vec2(2.0, 2.0);
+
+  // compute coords inside the viewport bounding box [0 -> viewport_dims]
+  vec2 viewport_coords = TexCoords * viewport_dims;
+
+  // transform viewport coordinates into image coords (normalized)
+  vec2 image_coords = (viewport_coords - image_origin) / scaled_image_dims;
+
+  // are they inside the box?
+  bvec2 inside_upper_bound = lessThan(image_coords, vec2(1.0, 1.0));
+  bvec2 inside_lower_bound = greaterThan(image_coords, vec2(0.0, 0.0));
+  float mask = float(inside_upper_bound.x && inside_upper_bound.y &&
+                     inside_lower_bound.x && inside_lower_bound.y);
+
+  vec3 rgb = texture(image, image_coords).xyz;
+  FragColor = vec4(rgb.x * mask, rgb.y * mask, rgb.z * mask, 1.0f);
 }
 )";
 
@@ -100,21 +143,28 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   // Enable seamless cubemaps
   glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
+  const std::filesystem::path dataset{args.input_path};
+
+  // Load the remap table.
+  const images::SimpleImage remap_table_img =
+      images::LoadRawFloatImage(args.input_path, args.table_width, args.table_height, 3);
+
+  // Copy remap table to GPU:
+  const gl_utils::Texture2D remap_table{remap_table_img};
+
+  // Load all the RGB images:
+  const std::vector<std::optional<images::SimpleImage>> faces =
+      images::LoadCubemapImages(dataset, args.index, 0, images::CubemapType::Rgb);
+
   // Load a cubemap
   GLuint texture_handle{0};
   glGenTextures(1, &texture_handle);
   ASSERT(texture_handle, "Failed to create texture handle");
   glBindTexture(GL_TEXTURE_CUBE_MAP, texture_handle);
 
-  const std::filesystem::path dataset{args.input_path};
-
-  // Load all the RGB images:
-  const std::vector<std::optional<images::SimpleImage>> faces =
-      images::LoadCubemapImages(dataset, args.index, 0, images::CubemapType::Rgb);
-
   for (int face = 0; face < 6; ++face) {
     const std::optional<images::SimpleImage>& image_opt = faces[face];
-    ASSERT(image_opt.has_value(), "Failed to load cubemap face");
+    ASSERT(image_opt.has_value(), "Failed to load cubemap face: {}", face);
 
     const images::SimpleImage& image = *image_opt;
     if (face == 0) {
@@ -241,6 +291,10 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
+    // These variables ensure we render with the correct aspect ratio:
+    display_program.SetUniformVec2("viewport_dims", glm::vec2(display_w, display_h));
+    display_program.SetUniformVec2("image_dims", glm::vec2(texture_width, texture_height));
+
     // Draw the image to the screen:
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
@@ -263,6 +317,13 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   // Save it out
   fmt::print("Saving image out!");
   images::WritePng("output.png", output, true);
+}
+
+// Callback to update viewport.
+void WindowSizeCallback(GLFWwindow* const window, int, int) {
+  int display_w, display_h;
+  glfwGetFramebufferSize(window, &display_w, &display_h);
+  glViewport(0, 0, display_w, display_h);
 }
 
 int Run(const ProgramArgs& args) {
@@ -295,6 +356,7 @@ int Run(const ProgramArgs& args) {
 
   // Enable vsync
   glfwSwapInterval(1);
+  glfwSetWindowSizeCallback(window, WindowSizeCallback);
 
   // Render until the window closes:
   ExecuteMainLoop(args, window);
@@ -310,5 +372,6 @@ int main(int argc, char** argv) {
   if (args_or_error.index() == 1) {
     return std::get<int>(args_or_error);
   }
-  return Run(std::get<ProgramArgs>(args_or_error));
+  return 0;
+  //  return Run(std::get<ProgramArgs>(args_or_error));
 }

@@ -22,6 +22,7 @@ namespace images {
 
 std::optional<SimpleImage> LoadPng(const std::filesystem::path& path, const ImageDepth expected_depth) {
   const std::string path_str = path.u8string();
+  ASSERT(expected_depth != ImageDepth::Bits32, "Cannot load 32 bit images w/ stb.");
 
   // Delegate to either 16bit or 8bit implementation:
   SimpleImage image{};
@@ -76,6 +77,8 @@ void WritePng(const std::filesystem::path& path, const SimpleImage& image, const
   ASSERT(image.components == 1 || image.components == 3, "Invalid # of components: {}", image.components);
   ASSERT(image.data.size() == image.Stride() * image.height, "Invalid image dims. size = {}, stride = {}, height = {}",
          image.data.size(), image.Stride(), image.height);
+  ASSERT(image.depth == ImageDepth::Bits8 || image.depth == ImageDepth::Bits16, "Invalid bit depth for WritePng: {}",
+         static_cast<int>(image.depth));
 
   const std::string path_str = path.u8string();
   png_struct* png_writer = png_create_write_struct(
@@ -114,6 +117,30 @@ void WritePng(const std::filesystem::path& path, const SimpleImage& image, const
   png_write_image(png_writer, &row_pointers[0]);
   png_write_end(png_writer, info);
   output_file.flush();
+}
+
+SimpleImage LoadRawFloatImage(const std::filesystem::path& path, const int width, const int height,
+                              const int channels) {
+  std::ifstream stream(path, std::ios::in | std::ios::binary);
+  ASSERT(stream.good(), "Failed to open file: {}", path.u8string());
+
+  // get file size:
+  stream.unsetf(std::ios::skipws);
+  stream.seekg(0, std::ios::end);
+  const std::streampos file_size = stream.tellg();
+  stream.seekg(0, std::ios::beg);
+
+  const auto expected_size = static_cast<std::size_t>(width * height * channels * sizeof(float));
+  ASSERT(file_size == expected_size,
+         "File is the wrong size. Expected = width ({}) * height ({}) * channels ({}) * {} = {}, actual = {}", width,
+         height, channels, sizeof(float), expected_size, file_size);
+
+  // Read the entire file:
+  SimpleImage image(width, height, channels, ImageDepth::Bits32);
+  const auto last =
+      std::copy(std::istream_iterator<uint8_t>(stream), std::istream_iterator<uint8_t>(), image.data.begin());
+  ASSERT(last == image.data.end(), "Failed to read the entire file for some reason. File position: {}", stream.tellg());
+  return image;
 }
 
 std::vector<std::optional<SimpleImage>> LoadCubemapImages(const std::filesystem::path& dataset_root,

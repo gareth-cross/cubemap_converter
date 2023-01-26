@@ -9,6 +9,7 @@ namespace images {
 enum class ImageDepth {
   Bits8 = 1,
   Bits16 = 2,
+  Bits32 = 4,  //  Assumed to mean float.
 };
 
 // Very simple image type.
@@ -41,6 +42,10 @@ std::optional<SimpleImage> LoadPng(const std::filesystem::path& path, ImageDepth
 
 // Write a PNG image.
 void WritePng(const std::filesystem::path& path, const SimpleImage& image, bool flip_vertical);
+
+// Load a float image from a raw file (no header, just packed bytes).
+// Data is expected to be in row-major order.
+SimpleImage LoadRawFloatImage(const std::filesystem::path& path, int width, int height, int channels);
 
 // Types of cubemaps:
 enum class CubemapType {

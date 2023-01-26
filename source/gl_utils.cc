@@ -3,6 +3,8 @@
 
 #include <array>
 
+#include "images.hpp"
+
 namespace gl_utils {
 
 // TODO: Fail more gracefully maybe?
@@ -55,6 +57,73 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
   }
   glUseProgram(0);
   return program;
+}
+
+static GLuint CreateTexture() {
+  GLuint texture{0};
+  glGenTextures(1, &texture);
+  ASSERT(texture != 0, "Failed create texture handle");
+  return texture;
+}
+
+Texture2D::Texture2D() : OpenGLHandle(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }) {}
+
+Texture2D::Texture2D(const images::SimpleImage& image) : Texture2D() { Fill(image); }
+
+struct TextureFormatEntry {
+  constexpr TextureFormatEntry(int channels, images::ImageDepth depth, GLenum value)
+      : channels(channels), depth(depth), value(value) {}
+
+  int channels;
+  images::ImageDepth depth;
+  GLenum value;
+};
+
+static GLenum GetTextureRepresentation(const int channels, const images::ImageDepth depth) {
+  using images::ImageDepth;
+  constexpr std::array table = {TextureFormatEntry(3, ImageDepth::Bits8, GL_RGB8),
+                                TextureFormatEntry(1, ImageDepth::Bits16, GL_R16),
+                                TextureFormatEntry(3, ImageDepth::Bits32, GL_RGB32F)};
+
+  const auto it = std::find_if(table.begin(), table.end(), [&](const TextureFormatEntry& entry) {
+    return entry.channels == channels && entry.depth == depth;
+  });
+  ASSERT(it != table.end(), "Invalid channels ({}) and depth ({})", channels, static_cast<int>(depth));
+  return it->value;
+}
+
+static GLenum GetTextureInputFormat(const int channels) {
+  ASSERT(channels == 1 || channels == 3, "Invalid # of channels: {}", channels);
+  return channels == 1 ? GL_RED : GL_RGB;
+}
+
+static constexpr GLenum GetTextureDataType(const images::ImageDepth depth) {
+  switch (depth) {
+    case images::ImageDepth::Bits8:
+      return GL_UNSIGNED_BYTE;
+    case images::ImageDepth::Bits16:
+      return GL_UNSIGNED_SHORT;
+    default:
+      break;
+  }
+  ASSERT(depth == images::ImageDepth::Bits32);
+  return GL_FLOAT;
+}
+
+void Texture2D::Fill(const struct images::SimpleImage& image) {
+  ASSERT(Handle());
+  const GLenum internal_format = GetTextureRepresentation(image.components, image.depth);
+
+  glBindTexture(GL_TEXTURE_2D, Handle());
+  glTexStorage2D(GL_TEXTURE_2D, 1, internal_format, image.width, image.height);
+
+  // Copy data to GPU:
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image.width, image.height, GetTextureInputFormat(image.components),
+                  GetTextureDataType(image.depth), &image.data[0]);
+
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
 }  // namespace gl_utils
