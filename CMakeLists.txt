@@ -13,7 +13,7 @@ message(STATUS "C++ compiler: ${CMAKE_CXX_COMPILER}")
 add_subdirectory(dependencies)
 
 set(GLAD_SOURCES dependencies/glad/src/gl.c)
-set(PROJECT_SOURCES source/main.cc)
+set(PROJECT_SOURCES source/main.cc source/gl_utils.cc)
 
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} ${GLAD_SOURCES})
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)

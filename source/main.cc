@@ -1,5 +1,6 @@
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -20,6 +21,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "assertions.hpp"
+#include "gl_utils.hpp"
 
 static void glfw_error_callback(int error, const char* description) {
   fmt::print("GLFW error. Code = {}, Message = {}\n", error, description);
@@ -81,7 +83,7 @@ GLenum TargetForFace(int face) {
   return faces[face];
 }
 
-static const char* vertex_source = R"(
+static const std::string_view vertex_source = R"(
 #version 330 core
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec2 uv;
@@ -96,7 +98,7 @@ void main() {
 }
 )";
 
-static const char* fragment_source = R"(
+static const std::string_view fragment_source = R"(
 #version 330 core
 out vec4 FragColor;
 
@@ -107,82 +109,7 @@ void main() {
 }
 )";
 
-// Compile and link the shader.
-GLuint CompileShaderProgram() {
-  const GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertex_shader, 1, &vertex_source, nullptr);
-  glCompileShader(vertex_shader);
-
-  // check if vertex shader compiled:
-  GLint success;
-  std::string compiler_log;
-  compiler_log.resize(1024);
-  glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &success);
-  if (!success) {
-    glGetShaderInfoLog(vertex_shader, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to compile vertex shader. Reason: {}", compiler_log);
-  }
-
-  // fragment shader
-  const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragment_shader, 1, &fragment_source, nullptr);
-  glCompileShader(fragment_shader);
-
-  // check for shader compile errors
-  glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &success);
-  if (!success) {
-    glGetShaderInfoLog(fragment_shader, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to compile fragment shader. Reason: {}", compiler_log);
-  }
-
-  // link shaders
-  GLuint program = glCreateProgram();
-  glAttachShader(program, vertex_shader);
-  glAttachShader(program, fragment_shader);
-  glLinkProgram(program);
-
-  // check for linking errors
-  glGetProgramiv(program, GL_LINK_STATUS, &success);
-  if (!success) {
-    glGetProgramInfoLog(program, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to link shader. Reason: {}", compiler_log);
-  }
-  glDeleteShader(vertex_shader);
-  glDeleteShader(fragment_shader);
-  return program;
-}
-
-int Run(const ProgramArgs& args) {
-  // Setup window
-  glfwSetErrorCallback(glfw_error_callback);
-  if (!glfwInit()) {
-    fmt::print("Failed to initialize GLFW.\n");
-    return 1;
-  }
-
-  // GL 3.3
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-
-  // Create window with graphics context
-  GLFWwindow* window = glfwCreateWindow(1280, 720, "Cubemap converter", nullptr, nullptr);
-  if (window == nullptr) {
-    fmt::print("Failed to create GLFW window\n");
-    return 1;
-  }
-  glfwMakeContextCurrent(window);
-
-  // print the version of OpenGL:
-  const int glad_version = gladLoadGL(glfwGetProcAddress);
-  fmt::print("Using OpenGL {}.{}\n", GLAD_VERSION_MAJOR(glad_version), GLAD_VERSION_MINOR(glad_version));
-
-  // Enable vsync
-  glfwSwapInterval(1);
-
+void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   // Enable seamless cubemaps
   glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
@@ -214,12 +141,12 @@ int Run(const ProgramArgs& args) {
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   // Create shader for displaying cubemap
-  const GLuint shader_program = CompileShaderProgram();
+  const gl_utils::ShaderProgram shader_program = gl_utils::CompileShaderProgram(vertex_source, fragment_source);
 
   // Create projection matrix:
   const glm::mat4x4 projection = glm::ortho(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f);
-  glUseProgram(shader_program);
-  const GLint projection_uniform = glGetUniformLocation(shader_program, "projection");
+  glUseProgram(shader_program.handle());
+  const GLint projection_uniform = glGetUniformLocation(shader_program.handle(), "projection");
   ASSERT(projection_uniform != -1, "Failed to find uniform");
   glUniformMatrix4fv(projection_uniform, 1, GL_FALSE, &projection[0][0]);
 
@@ -305,7 +232,7 @@ int Run(const ProgramArgs& args) {
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
 
-    glUseProgram(shader_program);
+    glUseProgram(shader_program.handle());
     glBindVertexArray(vertex_array);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 
@@ -337,6 +264,41 @@ int Run(const ProgramArgs& args) {
   fmt::print("Saving image out!");
   const int success = stbi_write_png("output.png", texture_width, texture_height, 3, &rgb_data[0], texture_width * 3);
   ASSERT(success, "Failed to write output png");
+}
+
+int Run(const ProgramArgs& args) {
+  // Setup window
+  glfwSetErrorCallback(glfw_error_callback);
+  if (!glfwInit()) {
+    fmt::print("Failed to initialize GLFW.\n");
+    return 1;
+  }
+
+  // GL 3.3
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#ifdef __APPLE__
+  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
+
+  // Create window with graphics context
+  GLFWwindow* const window = glfwCreateWindow(1280, 720, "Cubemap converter", nullptr, nullptr);
+  if (window == nullptr) {
+    fmt::print("Failed to create GLFW window\n");
+    return 1;
+  }
+  glfwMakeContextCurrent(window);
+
+  // print the version of OpenGL:
+  const int glad_version = gladLoadGL(glfwGetProcAddress);
+  fmt::print("Using OpenGL {}.{}\n", GLAD_VERSION_MAJOR(glad_version), GLAD_VERSION_MINOR(glad_version));
+
+  // Enable vsync
+  glfwSwapInterval(1);
+
+  // Render until the window closes:
+  ExecuteMainLoop(args, window);
 
   glfwDestroyWindow(window);
   glfwTerminate();
