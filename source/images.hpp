@@ -1,0 +1,56 @@
+// Copyright 2023 Gareth Cross
+#pragma once
+#include <filesystem>
+#include <optional>
+
+namespace images {
+
+// Supported bit depths.
+enum class ImageDepth {
+  Bits8 = 1,
+  Bits16 = 2,
+};
+
+// Very simple image type.
+struct SimpleImage {
+  std::vector<uint8_t> data{};
+  int width{0};
+  int height{0};
+  int components{0};
+  ImageDepth depth{ImageDepth::Bits8};
+
+  SimpleImage() = default;
+
+  // Construct w/ fields initialized.
+  SimpleImage(int width, int height, int components, ImageDepth depth)
+      : width(width), height(height), components(components), depth(depth) {
+    Allocate();
+  }
+
+  // Length of a row in bytes.
+  [[nodiscard]] std::size_t Stride() const {
+    return static_cast<std::size_t>(width) * static_cast<std::size_t>(depth) * static_cast<std::size_t>(components);
+  }
+
+  /// Allocate data to fit.
+  void Allocate() { data.resize(Stride() * static_cast<std::size_t>(height)); }
+};
+
+// Load a PNG image.
+std::optional<SimpleImage> LoadPng(const std::filesystem::path& path, ImageDepth expected_depth);
+
+// Write a PNG image.
+void WritePng(const std::filesystem::path& path, const SimpleImage& image, bool flip_vertical);
+
+// Types of cubemaps:
+enum class CubemapType {
+  Rgb,
+  Depth,
+};
+
+// Load all the cubemap images of a given type for the specified index.
+std::vector<std::optional<SimpleImage>> LoadCubemapImages(const std::filesystem::path& dataset_root,
+                                                          std::size_t image_index, std::size_t camera_index,
+                                                          CubemapType type);
+
+}  // namespace images

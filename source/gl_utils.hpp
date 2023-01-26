@@ -1,6 +1,7 @@
 // Copyright 2023 Gareth Cross
 #pragma once
 #include <glad/gl.h>
+#include <glm/glm.hpp>
 
 #include "assertions.hpp"
 
@@ -18,7 +19,7 @@ struct OpenGLHandle {
   explicit operator bool() const { return handle_ != 0; }
 
   // Get handle.
-  [[nodiscard]] GLuint handle() const { return handle_; }
+  [[nodiscard]] GLuint Handle() const { return handle_; }
 
   // Non-copyable.
   OpenGLHandle& operator=(const OpenGLHandle&) = delete;
@@ -51,6 +52,15 @@ struct Shader : public OpenGLHandle {
 // Wrapper for shader program.
 struct ShaderProgram : public OpenGLHandle {
   ShaderProgram() : OpenGLHandle(glCreateProgram(), [](GLuint x) noexcept { glDeleteProgram(x); }) {}
+
+  // Set a matrix uniform:
+  void SetMatrixUniform(const std::string_view name, const glm::mat4x4& matrix) const {
+    glUseProgram(Handle());
+    const GLint uniform = glGetUniformLocation(Handle(), name.data());
+    ASSERT(uniform != -1, "Failed to find uniform: {}", name);
+    glUniformMatrix4fv(uniform, 1, GL_FALSE, &matrix[0][0]);
+    glUseProgram(0);
+  }
 };
 
 // Compile and link a shader.

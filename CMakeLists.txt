@@ -16,7 +16,7 @@ add_subdirectory(dependencies)
 find_package(PNG REQUIRED)
 
 set(GLAD_SOURCES dependencies/glad/src/gl.c)
-set(PROJECT_SOURCES source/main.cc source/gl_utils.cc)
+set(PROJECT_SOURCES source/main.cc source/gl_utils.cc source/images.cc)
 
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} ${GLAD_SOURCES})
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
