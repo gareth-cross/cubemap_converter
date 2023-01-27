@@ -3,32 +3,35 @@
 
 #include <array>
 
+#include <glm/gtc/type_ptr.hpp>
+
 #include "images.hpp"
 
 namespace gl_utils {
 
-void ShaderProgram::SetMatrixUniform(const std::string_view name, const glm::mat4x4& matrix) const {
-  glUseProgram(Handle());
-  const GLint uniform = glGetUniformLocation(Handle(), name.data());
+template <typename Func>
+void WithUniform(const GLuint handle, const std::string_view name, Func&& func) {
+  glUseProgram(handle);
+  const GLint uniform = glGetUniformLocation(handle, name.data());
   ASSERT(uniform != -1, "Failed to find uniform: {}", name);
-  glUniformMatrix4fv(uniform, 1, GL_FALSE, &matrix[0][0]);
+  std::invoke(std::forward<Func>(func), uniform);
   glUseProgram(0);
+}
+
+void ShaderProgram::SetMatrixUniform(const std::string_view name, const glm::mat4x4& matrix) const {
+  WithUniform(Handle(), name, [&](GLint uniform) { glUniformMatrix4fv(uniform, 1, GL_FALSE, glm::value_ptr(matrix)); });
+}
+
+void ShaderProgram::SetMatrixUniform(std::string_view name, const glm::mat3x3& matrix) const {
+  WithUniform(Handle(), name, [&](GLint uniform) { glUniformMatrix3fv(uniform, 1, GL_FALSE, glm::value_ptr(matrix)); });
 }
 
 void ShaderProgram::SetUniformVec2(const std::string_view name, const glm::vec2 value) const {
-  glUseProgram(Handle());
-  const GLint uniform = glGetUniformLocation(Handle(), name.data());
-  ASSERT(uniform != -1, "Failed to find uniform: {}", name);
-  glUniform2f(uniform, value.x, value.y);
-  glUseProgram(0);
+  WithUniform(Handle(), name, [&](GLint uniform) { glUniform2f(uniform, value.x, value.y); });
 }
 
 void ShaderProgram::SetUniformInt(const std::string_view name, const GLint value) const {
-  glUseProgram(Handle());
-  const GLint uniform = glGetUniformLocation(Handle(), name.data());
-  ASSERT(uniform != -1, "Failed to find uniform: {}", name);
-  glUniform1i(uniform, value);
-  glUseProgram(0);
+  WithUniform(Handle(), name, [&](GLint uniform) { glUniform1i(uniform, value); });
 }
 
 // TODO: Fail more gracefully maybe?
@@ -195,10 +198,14 @@ void GLAPIENTRY MessageCallback(GLenum source, GLenum type, GLuint id, GLenum se
              type, id, severity, message);
 }
 
-void EnableDebugOutput() {
+void EnableDebugOutput(int glad_version) {
   // During init, enable debug output
-  glEnable(GL_DEBUG_OUTPUT);
-  glDebugMessageCallback(MessageCallback, nullptr);
+  if (GLAD_VERSION_MAJOR(glad_version) >= 4 && GLAD_VERSION_MINOR(glad_version) >= 3) {
+    glEnable(GL_DEBUG_OUTPUT);
+    glDebugMessageCallback(MessageCallback, nullptr);
+  } else {
+    fmt::print("GL debug log not supported.\n");
+  }
 }
 
 }  // namespace gl_utils

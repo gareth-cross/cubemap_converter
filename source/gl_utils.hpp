@@ -1,7 +1,10 @@
 // Copyright 2023 Gareth Cross
 #pragma once
+#include <array>
+
 #include <glad/gl.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include "assertions.hpp"
 
@@ -59,6 +62,7 @@ struct ShaderProgram : public OpenGLHandle {
 
   // Set a matrix uniform:
   void SetMatrixUniform(std::string_view name, const glm::mat4x4& matrix) const;
+  void SetMatrixUniform(std::string_view name, const glm::mat3x3& matrix) const;
 
   // Set a scalar uniform:
   void SetUniformVec2(std::string_view name, glm::vec2 value) const;
@@ -90,7 +94,30 @@ struct TextureCube : public OpenGLHandle {
   int dimension_{0};
 };
 
+// Get the rotation of a given cubemap face (DX convention). Returns the rotation matrix cube_R_face.
+[[maybe_unused]] inline constexpr glm::fquat GetFaceRotation(const int face) {
+  const auto make_quat_xyzw = [](float x, float y, float z, float w) constexpr { return glm::fquat{w, x, y, z}; };
+  // clang-format off
+  constexpr std::array<glm::fquat, 6> cube_R_face = {
+    make_quat_xyzw(0, 0.70710678, 0, 0.70710678),   // + x
+    make_quat_xyzw(0, -0.70710678, 0, 0.70710678),  // - x
+    make_quat_xyzw(-0.70710678, 0, 0, 0.70710678),  // + y
+    make_quat_xyzw(0.70710678, 0, 0, 0.70710678),   // - y
+    make_quat_xyzw(0, 0, 0, 1),                     // + z
+    make_quat_xyzw(0, 1, 0, 0),                     // - z
+  };
+  // clang-format on
+  return cube_R_face[face];
+}
+
+// Get the matrix right_M_left. You would convert a rotation matrix using:
+// right_M_left * R * left_M_right
+[[maybe_unused]] inline glm::mat3x3 GetRightMLeft() {
+  // These are columns:
+  return glm::mat3x3{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+}
+
 // Enable printing of opengl errors.
-void EnableDebugOutput();
+void EnableDebugOutput(int glad_version);
 
 }  // namespace gl_utils

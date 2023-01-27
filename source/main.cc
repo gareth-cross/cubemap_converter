@@ -5,8 +5,6 @@
 #include <string>
 #include <variant>
 
-#define GL_SILENCE_DEPRECATION
-
 #include <glad/gl.h>
 
 #include <GLFW/glfw3.h>
@@ -14,6 +12,7 @@
 #include <CLI/CLI.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include "assertions.hpp"
 #include "gl_utils.hpp"
@@ -30,6 +29,7 @@ struct ProgramArgs {
   std::string table_path;
   int table_width;
   int table_height;
+  bool enable_gl_debug;
 };
 
 // Parse program arts, or fail and return exit code.
@@ -42,6 +42,7 @@ std::variant<ProgramArgs, int> ParseProgramArgs(int argc, char** argv) {
     app.add_option("-t,--remap-table", args.table_path, "Path to the remap table.")->required();
     app.add_option("--width", args.table_width, "Width of the native image.")->required();
     app.add_option("--height", args.table_height, "Height of the native image.")->required();
+    app.add_option("--debug", args.enable_gl_debug, "Enable OpenGL debug log (v4.3 or higher).");
     app.parse(argc, argv);
   } catch (const CLI::ParseError& e) {
     return app.exit(e);
@@ -74,6 +75,9 @@ out vec4 FragColor;
 
 in vec2 TexCoords;
 
+// Rotation matrix from typical camera to DirectX Cubemap (what we exported).
+uniform mat3 cubemap_R_camera;
+
 // The remap table.
 uniform sampler2D remap_table;
 
@@ -84,7 +88,7 @@ void main() {
   // Lookup the unit vector:
   vec3 v_cam = normalize(texture(remap_table, TexCoords).xyz);
   // Sample the cube-map:
-  vec3 color = texture(input_cube, v_cam).rgb;
+  vec3 color = texture(input_cube, cubemap_R_camera * v_cam).rgb;
   FragColor = vec4(color, 1.0f);
 }
 )";
@@ -134,6 +138,9 @@ void main() {
 )";
 
 void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
+  ASSERT(args.table_width > 0 && args.table_height > 0, "Dimensions must be positive: w={}, h={}", args.table_width,
+         args.table_height);
+
   // Enable seamless cubemaps
   glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
@@ -170,6 +177,10 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   const glm::mat4x4 projection = glm::ortho(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f);
   cubemap_shader_program.SetMatrixUniform("projection", projection);
   display_program.SetMatrixUniform("projection", projection);
+
+  // The rotation from a DirectX camera to an unreal camera: (UE cam has +x forward, per their pawn convention).
+  constexpr glm::fquat unreal_cam_R_directx_cam = glm::fquat{0.5f, 0.5f, 0.5f, 0.5f};
+  cubemap_shader_program.SetMatrixUniform("cubemap_R_camera", glm::mat3_cast(unreal_cam_R_directx_cam));
 
   // Create a quad in a buffer.
   // The viewport is configured so that bottom left is [0, 0] and top right is [1, 1].
@@ -226,8 +237,8 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   ASSERT(color_buffer_texture);
   glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
 
-  const int texture_width = 640;
-  const int texture_height = 480;
+  const int texture_width = args.table_width;
+  const int texture_height = args.table_height;
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -339,14 +350,17 @@ int Run(const ProgramArgs& args) {
 
   // print the version of OpenGL:
   const int glad_version = gladLoadGL(glfwGetProcAddress);
-  fmt::print("Using OpenGL {}.{}\n", GLAD_VERSION_MAJOR(glad_version), GLAD_VERSION_MINOR(glad_version));
+  fmt::print("Using OpenGL {}.{} (GLAD generator = v{})\n", GLAD_VERSION_MAJOR(glad_version),
+             GLAD_VERSION_MINOR(glad_version), GLAD_GENERATOR_VERSION);
 
   // Enable vsync
   glfwSwapInterval(1);
   glfwSetWindowSizeCallback(window, WindowSizeCallback);
 
   // print errors
-  gl_utils::EnableDebugOutput();
+  if (args.enable_gl_debug) {
+    gl_utils::EnableDebugOutput(glad_version);
+  }
 
   // Render until the window closes:
   ExecuteMainLoop(args, window);
