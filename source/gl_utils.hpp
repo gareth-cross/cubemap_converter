@@ -58,22 +58,13 @@ struct ShaderProgram : public OpenGLHandle {
   ShaderProgram() : OpenGLHandle(glCreateProgram(), [](GLuint x) noexcept { glDeleteProgram(x); }) {}
 
   // Set a matrix uniform:
-  void SetMatrixUniform(const std::string_view name, const glm::mat4x4& matrix) const {
-    glUseProgram(Handle());
-    const GLint uniform = glGetUniformLocation(Handle(), name.data());
-    ASSERT(uniform != -1, "Failed to find uniform: {}", name);
-    glUniformMatrix4fv(uniform, 1, GL_FALSE, &matrix[0][0]);
-    glUseProgram(0);
-  }
+  void SetMatrixUniform(std::string_view name, const glm::mat4x4& matrix) const;
 
   // Set a scalar uniform:
-  void SetUniformVec2(const std::string_view name, const glm::vec2 value) const {
-    glUseProgram(Handle());
-    const GLint uniform = glGetUniformLocation(Handle(), name.data());
-    ASSERT(uniform != -1, "Failed to find uniform: {}", name);
-    glUniform2f(uniform, value.x, value.y);
-    glUseProgram(0);
-  }
+  void SetUniformVec2(std::string_view name, glm::vec2 value) const;
+
+  // Set a integer uniform
+  void SetUniformInt(std::string_view name, GLint value) const;
 };
 
 // Compile and link a shader.
@@ -87,5 +78,19 @@ struct Texture2D : public OpenGLHandle {
   // Fill the texture from an image.
   void Fill(const struct images::SimpleImage& image);
 };
+
+// Wrapper for cubemap texture.
+struct TextureCube : public OpenGLHandle {
+  TextureCube();
+
+  // Fill the specified face w/ the provided image.
+  void Fill(int face, const struct images::SimpleImage& image);
+
+ private:
+  int dimension_{0};
+};
+
+// Enable printing of opengl errors.
+void EnableDebugOutput();
 
 }  // namespace gl_utils

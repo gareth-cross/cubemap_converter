@@ -32,41 +32,24 @@ struct ProgramArgs {
   int table_height;
 };
 
-template <typename... Ts>
-auto AddOptionChecked(CLI::App& app, Ts&&... args) {
-  const auto result = app.add_option(std::forward<Ts>(args)...);
-  ASSERT(result, "Failed to add argument for some reason");
-  return result;
-}
-
 // Parse program arts, or fail and return exit code.
 std::variant<ProgramArgs, int> ParseProgramArgs(int argc, char** argv) {
   CLI::App app{"Cubemap converter"};
   ProgramArgs args{};
-  AddOptionChecked(app, "-i,--input-path", args.input_path, "Path to the input dataset.")->required();
-  AddOptionChecked(app, "--index", args.index, "Index of the image to display.")->required();
-  AddOptionChecked(app, "-t,--remap-table", args.table_path, "Path to the remap table.")->required();
-  AddOptionChecked(app, "-w,--width", args.table_width, "Width of the native image.")->required();
-  AddOptionChecked(app, "-h,--height", args.table_height, "Height of the native image.")->required();
   try {
+    app.add_option("-i,--input-path", args.input_path, "Path to the input dataset.")->required();
+    app.add_option("--index", args.index, "Index of the image to display.")->required();
+    app.add_option("-t,--remap-table", args.table_path, "Path to the remap table.")->required();
+    app.add_option("--width", args.table_width, "Width of the native image.")->required();
+    app.add_option("--height", args.table_height, "Height of the native image.")->required();
     app.parse(argc, argv);
   } catch (const CLI::ParseError& e) {
     return app.exit(e);
-  } catch (const std::exception& e) {
+  } catch (const CLI::Error& e) {
     fmt::print("Some other exception: {}", e.what());
     return 1;
   }
   return args;
-}
-
-// Get appropriate OpenGL for the given face index.
-GLenum TargetForFace(int face) {
-  constexpr std::array<GLenum, 6> faces = {
-      GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X, GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
-      GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
-  };
-  ASSERT(face >= 0 && face < 6, "Invalid face: {}", face);
-  return faces[face];
 }
 
 static const std::string_view vertex_source = R"(
@@ -74,6 +57,7 @@ static const std::string_view vertex_source = R"(
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec2 uv;
 
+// Projection matrix of the viewport.
 uniform mat4 projection;
 
 out vec2 TexCoords;
@@ -90,8 +74,18 @@ out vec4 FragColor;
 
 in vec2 TexCoords;
 
+// The remap table.
+uniform sampler2D remap_table;
+
+// The cubemap.
+uniform samplerCube input_cube;
+
 void main() {
-  FragColor = vec4(TexCoords.x, TexCoords.y, 0.0f, 1.0f);
+  // Lookup the unit vector:
+  vec3 v_cam = normalize(texture(remap_table, TexCoords).xyz);
+  // Sample the cube-map:
+  vec3 color = texture(input_cube, v_cam).rgb;
+  FragColor = vec4(color, 1.0f);
 }
 )";
 
@@ -147,7 +141,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
   // Load the remap table.
   const images::SimpleImage remap_table_img =
-      images::LoadRawFloatImage(args.input_path, args.table_width, args.table_height, 3);
+      images::LoadRawFloatImage(args.table_path, args.table_width, args.table_height, 3);
 
   // Copy remap table to GPU:
   const gl_utils::Texture2D remap_table{remap_table_img};
@@ -156,29 +150,13 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   const std::vector<std::optional<images::SimpleImage>> faces =
       images::LoadCubemapImages(dataset, args.index, 0, images::CubemapType::Rgb);
 
-  // Load a cubemap
-  GLuint texture_handle{0};
-  glGenTextures(1, &texture_handle);
-  ASSERT(texture_handle, "Failed to create texture handle");
-  glBindTexture(GL_TEXTURE_CUBE_MAP, texture_handle);
-
+  // Create a cube-map:
+  gl_utils::TextureCube cube{};
   for (int face = 0; face < 6; ++face) {
     const std::optional<images::SimpleImage>& image_opt = faces[face];
     ASSERT(image_opt.has_value(), "Failed to load cubemap face: {}", face);
-
-    const images::SimpleImage& image = *image_opt;
-    if (face == 0) {
-      // Allocate cubemap:
-      glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGB32F, image.width, image.height);
-    }
-
-    // Copy face to GPU:
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexSubImage2D(TargetForFace(face), 0, 0, 0, image.width, image.height, GL_RGB, GL_UNSIGNED_BYTE, &image.data[0]);
+    cube.Fill(face, *image_opt);
   }
-
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   // Create shader for building native image:
   const gl_utils::ShaderProgram cubemap_shader_program =
@@ -277,6 +255,14 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
 
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, remap_table.Handle());
+    cubemap_shader_program.SetUniformInt("remap_table", 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cube.Handle());
+    cubemap_shader_program.SetUniformInt("input_cube", 1);
+
     glUseProgram(cubemap_shader_program.Handle());
     glBindVertexArray(vertex_array);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
@@ -294,6 +280,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     // These variables ensure we render with the correct aspect ratio:
     display_program.SetUniformVec2("viewport_dims", glm::vec2(display_w, display_h));
     display_program.SetUniformVec2("image_dims", glm::vec2(texture_width, texture_height));
+    display_program.SetUniformInt("image", 0);
 
     // Draw the image to the screen:
     glActiveTexture(GL_TEXTURE0);
@@ -335,7 +322,7 @@ int Run(const ProgramArgs& args) {
   }
 
   // GL 3.3
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
@@ -358,6 +345,9 @@ int Run(const ProgramArgs& args) {
   glfwSwapInterval(1);
   glfwSetWindowSizeCallback(window, WindowSizeCallback);
 
+  // print errors
+  gl_utils::EnableDebugOutput();
+
   // Render until the window closes:
   ExecuteMainLoop(args, window);
 
@@ -372,6 +362,5 @@ int main(int argc, char** argv) {
   if (args_or_error.index() == 1) {
     return std::get<int>(args_or_error);
   }
-  return 0;
-  //  return Run(std::get<ProgramArgs>(args_or_error));
+  return Run(std::get<ProgramArgs>(args_or_error));
 }

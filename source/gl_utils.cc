@@ -7,6 +7,30 @@
 
 namespace gl_utils {
 
+void ShaderProgram::SetMatrixUniform(const std::string_view name, const glm::mat4x4& matrix) const {
+  glUseProgram(Handle());
+  const GLint uniform = glGetUniformLocation(Handle(), name.data());
+  ASSERT(uniform != -1, "Failed to find uniform: {}", name);
+  glUniformMatrix4fv(uniform, 1, GL_FALSE, &matrix[0][0]);
+  glUseProgram(0);
+}
+
+void ShaderProgram::SetUniformVec2(const std::string_view name, const glm::vec2 value) const {
+  glUseProgram(Handle());
+  const GLint uniform = glGetUniformLocation(Handle(), name.data());
+  ASSERT(uniform != -1, "Failed to find uniform: {}", name);
+  glUniform2f(uniform, value.x, value.y);
+  glUseProgram(0);
+}
+
+void ShaderProgram::SetUniformInt(const std::string_view name, const GLint value) const {
+  glUseProgram(Handle());
+  const GLint uniform = glGetUniformLocation(Handle(), name.data());
+  ASSERT(uniform != -1, "Failed to find uniform: {}", name);
+  glUniform1i(uniform, value);
+  glUseProgram(0);
+}
+
 // TODO: Fail more gracefully maybe?
 ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const std::string_view fragment_source) {
   const Shader vertex_shader{GL_VERTEX_SHADER};
@@ -124,6 +148,57 @@ void Texture2D::Fill(const struct images::SimpleImage& image) {
 
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+}
+
+TextureCube::TextureCube() : OpenGLHandle(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }) {}
+
+// Get appropriate OpenGL for the given face index.
+static GLenum TargetForFace(int face) {
+  constexpr std::array<GLenum, 6> faces = {
+      GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X, GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
+      GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+  };
+  ASSERT(face >= 0 && face < 6, "Invalid face: {}", face);
+  return faces[face];
+}
+
+void TextureCube::Fill(const int face, const images::SimpleImage& image) {
+  ASSERT(image.width == image.height, "Faces should be square. Width = {}, height = {}", image.width, image.height);
+
+  glBindTexture(GL_TEXTURE_CUBE_MAP, Handle());
+  if (dimension_ == 0) {
+    // Allocate cubemap:
+    dimension_ = image.width;
+    glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GetTextureRepresentation(image.components, image.depth), dimension_,
+                   dimension_);
+  } else {
+    ASSERT(dimension_ == image.width, "All faces must have same dimension");
+  }
+
+  // Copy face to GPU:
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  glTexSubImage2D(TargetForFace(face), 0, 0, 0, dimension_, dimension_, GetTextureInputFormat(image.components),
+                  GetTextureDataType(image.depth), &image.data[0]);
+
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+#if 0
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+#endif
+}
+
+void GLAPIENTRY MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
+                                const GLchar* message, const void* userParam) {
+  fmt::print("GL error callback: source = {:X}, type = {:X}, id = {}, severity = {:X}, message = \'{}\'\n", source,
+             type, id, severity, message);
+}
+
+void EnableDebugOutput() {
+  // During init, enable debug output
+  glEnable(GL_DEBUG_OUTPUT);
+  glDebugMessageCallback(MessageCallback, nullptr);
 }
 
 }  // namespace gl_utils
