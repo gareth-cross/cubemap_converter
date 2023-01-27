@@ -2,7 +2,6 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <string>
 #include <variant>
 
 #include <glad/gl.h>
@@ -17,6 +16,11 @@
 #include "assertions.hpp"
 #include "gl_utils.hpp"
 #include "images.hpp"
+
+// Include all the shaders, which we generate from the files in `shaders/*.glsl`
+#include "shaders/fragment_cubemap.hpp"
+#include "shaders/fragment_display.hpp"
+#include "shaders/vertex.hpp"
 
 static void glfw_error_callback(int error, const char* description) {
   fmt::print("GLFW error. Code = {}, Message = {}\n", error, description);
@@ -54,138 +58,6 @@ std::variant<ProgramArgs, int> ParseProgramArgs(int argc, char** argv) {
   }
   return args;
 }
-
-static const std::string_view vertex_source = R"(
-#version 330 core
-layout(location = 0) in vec3 pos;
-layout(location = 1) in vec2 uv;
-
-// Projection matrix of the viewport.
-uniform mat4 projection;
-
-out vec2 TexCoords;
-
-void main() {
-  gl_Position = projection * vec4(pos.x, pos.y, pos.z, 1.0);
-  TexCoords = uv;
-}
-)";
-
-static const std::string_view fragment_source_cubemap_render = R"(
-#version 330 core
-out vec4 FragColor;
-
-in vec2 TexCoords;
-
-// Fragment coordinate in pixels.
-// Note that we swap the origin to the top left, since the valid mask is read in flipped vertically.
-layout(origin_upper_left, pixel_center_integer) in vec4 gl_FragCoord;
-
-// Rotation matrix from typical camera to DirectX Cubemap (what we exported).
-uniform mat3 cubemap_R_camera;
-
-// The remap table.
-uniform sampler2D remap_table;
-
-// The cubemap.
-uniform samplerCube input_cube;
-
-// The valid mask (corresponds to the remap table).
-uniform sampler2D valid_mask;
-
-// True if we are processing the inverse-depth map.
-uniform bool is_depth;
-
-void main() {
-  // Lookup the unit vector:
-  vec3 v_cam = normalize(texture(remap_table, TexCoords).xyz);
-  vec3 v_cube = cubemap_R_camera * v_cam;
-
-  // Sample the cube-map:
-  vec3 color = texture(input_cube, v_cube).rgb;
-
-  // Read from the valid mask:
-  float is_valid = float(texelFetch(valid_mask, ivec2(gl_FragCoord.x, gl_FragCoord.y), 0).r > 0.0);
-
-  if (!is_depth) {
-    FragColor = vec4(color * is_valid, 1.0f);
-  } else {
-    // This is not real color, but inverse depth. The texture unit has normalized from [0, 65535] --> [0, 1].
-    float inv_depth_normalized = color.x;
-
-    // TODO: Make this a parameter. This is the near clipping plane in unreal engine.
-    const float ue_near_clip_plane_meters = 0.1f;
-
-    // Scale inverse depth into units of meters.
-    float inv_depth_meters = inv_depth_normalized / ue_near_clip_plane_meters;
-
-    // Inverse depth has been specified wrt the image plane of the cube face.
-    // We convert to inverse range in the target camera model.
-    // The largest element of `v_cube` determines what face of the cubemap we read from. For example,
-    // [0.1, 0.2, 0.6] reads from +z, while [-0.7, 0.1, 0.1] would read from -x.
-
-    // To convert from inverse depth to inverse range we do:
-    // v_cube * range = p_face * depth ---> v_unit / inv_range = p_face / inv_depth
-    // Where `p_face` is a point in the face of the cube we sampled from. Notably, one of the elements of p_face will
-    // always be +1 or -1 (the element corresponding to the plane of the face).
-    //
-    // Then:
-    // max(v_cube.xyz) / inv_range = ± 1 / inv_depth
-    // max(v_cube.xyz) * inv_depth = ± inv_range
-    // Where we have to be careful to take the absolute value of the max of (x,y,z) in order to keep range positive.
-    float max_axis = max(max(abs(v_cube.x), abs(v_cube.y)), abs(v_cube.z));
-    float inv_range_meters = inv_depth_meters * max_axis;
-
-    // Normalize it back into the range of [0 (infinity), 1 / ue_clip_plane].
-    float inv_range_normalized = min(inv_range_meters * ue_near_clip_plane_meters, 1.0f);
-    FragColor = vec4(inv_range_normalized * is_valid, 0.0f, 0.0f, 1.0f);
-  }
-}
-)";
-
-// Program for previewing the image in the viewport.
-static const std::string_view fragment_source_image_render = R"(
-#version 330 core
-out vec4 FragColor;
-
-in vec2 TexCoords;
-
-// Texture we are going to display.
-uniform sampler2D image;
-
-// Viewport dims in pixels.
-uniform vec2 viewport_dims;
-
-// Image dims in pixels.
-uniform vec2 image_dims;
-
-void main() {
-  // determine scale factor to fit the image in the viewport
-  float scale_factor =
-      min(viewport_dims.x / image_dims.x, viewport_dims.y / image_dims.y);
-
-  // scale image dimensions to fit
-  vec2 scaled_image_dims = image_dims * scale_factor;
-
-  // compute offset to center:
-  vec2 image_origin = (viewport_dims - scaled_image_dims) / vec2(2.0, 2.0);
-
-  // compute coords inside the viewport bounding box [0 -> viewport_dims]
-  vec2 viewport_coords = TexCoords * viewport_dims;
-
-  // transform viewport coordinates into image coords (normalized)
-  vec2 image_coords = (viewport_coords - image_origin) / scaled_image_dims;
-
-  // are they inside the box?
-  bvec2 inside_upper_bound = lessThan(image_coords, vec2(1.0, 1.0));
-  bvec2 inside_lower_bound = greaterThan(image_coords, vec2(0.0, 0.0));
-  float mask = float(inside_upper_bound.x && inside_upper_bound.y &&
-                     inside_lower_bound.x && inside_lower_bound.y);
-
-  vec3 rgb = texture(image, image_coords).xyz;
-  FragColor = vec4(rgb.x * mask, rgb.y * mask, rgb.z * mask, 1.0f);
-}
-)";
 
 gl_utils::Texture2D LoadValidMask(const std::string& mask_path, const int table_width, const int table_height) {
   gl_utils::Texture2D texture{};
@@ -238,11 +110,11 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
   // Create shader for building native image:
   const gl_utils::ShaderProgram cubemap_shader_program =
-      gl_utils::CompileShaderProgram(vertex_source, fragment_source_cubemap_render);
+      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_cubemap);
 
   // Create shader for displaying the native image in the UI:
   const gl_utils::ShaderProgram display_program =
-      gl_utils::CompileShaderProgram(vertex_source, fragment_source_image_render);
+      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_display);
 
   // Create projection matrix:
   const glm::mat4x4 projection = glm::ortho(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f);
@@ -340,17 +212,17 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, remap_table.Handle());
-    cubemap_shader_program.SetUniformInt("remap_table", 0);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_CUBE_MAP, cube.Handle());
-    cubemap_shader_program.SetUniformInt("input_cube", 1);
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, valid_mask.Handle());
-    cubemap_shader_program.SetUniformInt("valid_mask", 2);
 
     // Tell the shader what we are rendering:
+    cubemap_shader_program.SetUniformInt("remap_table", 0);
+    cubemap_shader_program.SetUniformInt("input_cube", 1);
+    cubemap_shader_program.SetUniformInt("valid_mask", 2);
     cubemap_shader_program.SetUniformInt("is_depth", false);
 
     glUseProgram(cubemap_shader_program.Handle());

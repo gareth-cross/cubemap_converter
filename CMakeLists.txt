@@ -15,6 +15,9 @@ add_subdirectory(dependencies)
 # Find lib png:
 find_package(PNG REQUIRED)
 
+# Add shaders
+add_subdirectory(shaders)
+
 set(GLAD_SOURCES dependencies/glad/src/gl.c)
 set(PROJECT_SOURCES source/main.cc source/gl_utils.cc source/images.cc)
 
@@ -28,7 +31,7 @@ target_include_directories(
           "${CMAKE_SOURCE_DIR}/dependencies/scope_guard")
 
 # Add dependencies
-add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm PNG::PNG)
+add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm PNG::PNG shaders)
 target_link_libraries(
   ${PROJECT_NAME}
   glfw
@@ -36,4 +39,5 @@ target_link_libraries(
   opengl32
   CLI11
   glm
-  PNG::PNG)
+  PNG::PNG
+        shaders)
