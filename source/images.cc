@@ -104,14 +104,23 @@ void WritePng(const std::filesystem::path& path, const SimpleImage& image, const
                PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
   png_write_info(png_writer, info);
 
+  // Copy and swap byte order (for 16-bits) to network order. TODO: Copy is redundant for 8-bit depth.
+  std::vector<uint8_t> network_order = image.data;
+  if (image.depth == ImageDepth::Bits16) {
+    ASSERT(network_order.size() % sizeof(uint16_t) == 0);
+    for (std::size_t i = 0; i < network_order.size(); i += sizeof(uint16_t)) {
+      std::swap(network_order[i], network_order[i + 1]);
+    }
+  }
+
   // Create array of row pointers and write out the image:
   std::vector<png_bytep> row_pointers{static_cast<std::size_t>(image.height)};
   for (std::size_t y = 0; y < image.height; ++y) {
     if (flip_vertical) {
       // Flip the order of rows when we write out:
-      row_pointers[y] = const_cast<uint8_t*>(&image.data[(image.height - y - 1) * image.Stride()]);
+      row_pointers[y] = const_cast<uint8_t*>(&network_order[(image.height - y - 1) * image.Stride()]);
     } else {
-      row_pointers[y] = const_cast<uint8_t*>(&image.data[y * image.Stride()]);
+      row_pointers[y] = const_cast<uint8_t*>(&network_order[y * image.Stride()]);
     }
   }
   png_write_image(png_writer, &row_pointers[0]);

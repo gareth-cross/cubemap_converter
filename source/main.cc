@@ -30,6 +30,7 @@ struct ProgramArgs {
   int table_width;
   int table_height;
   bool enable_gl_debug;
+  std::string valid_mask_path;
 };
 
 // Parse program arts, or fail and return exit code.
@@ -43,6 +44,7 @@ std::variant<ProgramArgs, int> ParseProgramArgs(int argc, char** argv) {
     app.add_option("--width", args.table_width, "Width of the native image.")->required();
     app.add_option("--height", args.table_height, "Height of the native image.")->required();
     app.add_option("--debug", args.enable_gl_debug, "Enable OpenGL debug log (v4.3 or higher).");
+    app.add_option("--mask", args.valid_mask_path, "Optional valid mask image (png).");
     app.parse(argc, argv);
   } catch (const CLI::ParseError& e) {
     return app.exit(e);
@@ -75,6 +77,10 @@ out vec4 FragColor;
 
 in vec2 TexCoords;
 
+// Fragment coordinate in pixels.
+// Note that we swap the origin to the top left, since the valid mask is read in flipped vertically.
+layout(origin_upper_left, pixel_center_integer) in vec4 gl_FragCoord;
+
 // Rotation matrix from typical camera to DirectX Cubemap (what we exported).
 uniform mat3 cubemap_R_camera;
 
@@ -84,12 +90,56 @@ uniform sampler2D remap_table;
 // The cubemap.
 uniform samplerCube input_cube;
 
+// The valid mask (corresponds to the remap table).
+uniform sampler2D valid_mask;
+
+// True if we are processing the inverse-depth map.
+uniform bool is_depth;
+
 void main() {
   // Lookup the unit vector:
   vec3 v_cam = normalize(texture(remap_table, TexCoords).xyz);
+  vec3 v_cube = cubemap_R_camera * v_cam;
+
   // Sample the cube-map:
-  vec3 color = texture(input_cube, cubemap_R_camera * v_cam).rgb;
-  FragColor = vec4(color, 1.0f);
+  vec3 color = texture(input_cube, v_cube).rgb;
+
+  // Read from the valid mask:
+  float is_valid = float(texelFetch(valid_mask, ivec2(gl_FragCoord.x, gl_FragCoord.y), 0).r > 0.0);
+
+  if (!is_depth) {
+    FragColor = vec4(color * is_valid, 1.0f);
+  } else {
+    // This is not real color, but inverse depth. The texture unit has normalized from [0, 65535] --> [0, 1].
+    float inv_depth_normalized = color.x;
+
+    // TODO: Make this a parameter. This is the near clipping plane in unreal engine.
+    const float ue_near_clip_plane_meters = 0.1f;
+
+    // Scale inverse depth into units of meters.
+    float inv_depth_meters = inv_depth_normalized / ue_near_clip_plane_meters;
+
+    // Inverse depth has been specified wrt the image plane of the cube face.
+    // We convert to inverse range in the target camera model.
+    // The largest element of `v_cube` determines what face of the cubemap we read from. For example,
+    // [0.1, 0.2, 0.6] reads from +z, while [-0.7, 0.1, 0.1] would read from -x.
+
+    // To convert from inverse depth to inverse range we do:
+    // v_cube * range = p_face * depth ---> v_unit / inv_range = p_face / inv_depth
+    // Where `p_face` is a point in the face of the cube we sampled from. Notably, one of the elements of p_face will
+    // always be +1 or -1 (the element corresponding to the plane of the face).
+    //
+    // Then:
+    // max(v_cube.xyz) / inv_range = ± 1 / inv_depth
+    // max(v_cube.xyz) * inv_depth = ± inv_range
+    // Where we have to be careful to take the absolute value of the max of (x,y,z) in order to keep range positive.
+    float max_axis = max(max(abs(v_cube.x), abs(v_cube.y)), abs(v_cube.z));
+    float inv_range_meters = inv_depth_meters * max_axis;
+
+    // Normalize it back into the range of [0 (infinity), 1 / ue_clip_plane].
+    float inv_range_normalized = min(inv_range_meters * ue_near_clip_plane_meters, 1.0f);
+    FragColor = vec4(inv_range_normalized * is_valid, 0.0f, 0.0f, 1.0f);
+  }
 }
 )";
 
@@ -137,6 +187,24 @@ void main() {
 }
 )";
 
+gl_utils::Texture2D LoadValidMask(const std::string& mask_path, const int table_width, const int table_height) {
+  gl_utils::Texture2D texture{};
+  if (mask_path.empty()) {
+    // No mask, just put a white image in (valid everywhere).
+    images::SimpleImage white_image{table_width, table_height, 1, images::ImageDepth::Bits8};
+    std::fill(white_image.data.begin(), white_image.data.end(), 255);
+    texture.Fill(white_image);
+  } else {
+    std::optional<images::SimpleImage> mask_image = images::LoadPng(mask_path, images::ImageDepth::Bits8);
+    ASSERT(mask_image.has_value(), "Could not load valid mask from: {}", mask_path);
+    ASSERT(mask_image->width == table_width && mask_image->height == table_height,
+           "Remap table and valid mask do not share the same dimensions. mask = [{}, {}], table = [{}, {}]",
+           mask_image->width, mask_image->height, table_width, table_height);
+    texture.Fill(*mask_image);
+  }
+  return texture;
+}
+
 void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   ASSERT(args.table_width > 0 && args.table_height > 0, "Dimensions must be positive: w={}, h={}", args.table_width,
          args.table_height);
@@ -152,6 +220,9 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
   // Copy remap table to GPU:
   const gl_utils::Texture2D remap_table{remap_table_img};
+
+  // Load the valid mask
+  const gl_utils::Texture2D valid_mask = LoadValidMask(args.valid_mask_path, args.table_width, args.table_height);
 
   // Load all the RGB images:
   const std::vector<std::optional<images::SimpleImage>> faces =
@@ -169,7 +240,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   const gl_utils::ShaderProgram cubemap_shader_program =
       gl_utils::CompileShaderProgram(vertex_source, fragment_source_cubemap_render);
 
-  // Create shader for
+  // Create shader for displaying the native image in the UI:
   const gl_utils::ShaderProgram display_program =
       gl_utils::CompileShaderProgram(vertex_source, fragment_source_image_render);
 
@@ -237,9 +308,10 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   ASSERT(color_buffer_texture);
   glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
 
+  // Create a 32-bit float render target for the output:
   const int texture_width = args.table_width;
   const int texture_height = args.table_height;
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -274,6 +346,13 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     glBindTexture(GL_TEXTURE_CUBE_MAP, cube.Handle());
     cubemap_shader_program.SetUniformInt("input_cube", 1);
 
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, valid_mask.Handle());
+    cubemap_shader_program.SetUniformInt("valid_mask", 2);
+
+    // Tell the shader what we are rendering:
+    cubemap_shader_program.SetUniformInt("is_depth", false);
+
     glUseProgram(cubemap_shader_program.Handle());
     glBindVertexArray(vertex_array);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
@@ -306,11 +385,27 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   }
 
   // Read contents of the RGB buffer back:
+#if 0
+  images::SimpleImage output{texture_width, texture_height, 1, images::ImageDepth::Bits16};
+
+  glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_SHORT, &output.data[0]);
+#else
   images::SimpleImage output{texture_width, texture_height, 3, images::ImageDepth::Bits8};
 
   glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, &output.data[0]);
+#endif
+
+  //  std::vector<uint16_t> float_values;
+  //  float_values.resize(output.data.size() / sizeof(uint16_t));
+  //  std::memcpy(&float_values[0], &output.data[0], output.data.size());
+  //
+  //  const auto min = *std::min_element(float_values.begin(), float_values.end());
+  //  const auto max = *std::max_element(float_values.begin(), float_values.end());
+  //  fmt::print("min = {}, max = {}\n", min, max);
 
   // Save it out
   fmt::print("Saving image out!");

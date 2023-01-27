@@ -39,6 +39,7 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
   const Shader vertex_shader{GL_VERTEX_SHADER};
   ASSERT(vertex_shader, "Failed to allocate vertex shader");
 
+  // Create array of strings, which is what glShaderSource expects (we only have one string).
   const std::array<const GLchar*, 1> vertex_source_ = {vertex_source.data()};
   glShaderSource(vertex_shader.Handle(), vertex_source_.size(), vertex_source_.data(), nullptr);
   glCompileShader(vertex_shader.Handle());
@@ -106,11 +107,12 @@ struct TextureFormatEntry {
   GLenum value;
 };
 
+// Convert channels + depth to our preferred representation on the GPU.
 static GLenum GetTextureRepresentation(const int channels, const images::ImageDepth depth) {
   using images::ImageDepth;
-  constexpr std::array table = {TextureFormatEntry(3, ImageDepth::Bits8, GL_RGB8),
-                                TextureFormatEntry(1, ImageDepth::Bits16, GL_R16),
-                                TextureFormatEntry(3, ImageDepth::Bits32, GL_RGB32F)};
+  constexpr std::array table = {
+      TextureFormatEntry(1, ImageDepth::Bits8, GL_R8), TextureFormatEntry(3, ImageDepth::Bits8, GL_RGB8),
+      TextureFormatEntry(1, ImageDepth::Bits16, GL_R16), TextureFormatEntry(3, ImageDepth::Bits32, GL_RGB32F)};
 
   const auto it = std::find_if(table.begin(), table.end(), [&](const TextureFormatEntry& entry) {
     return entry.channels == channels && entry.depth == depth;
@@ -192,8 +194,8 @@ void TextureCube::Fill(const int face, const images::SimpleImage& image) {
 #endif
 }
 
-void GLAPIENTRY MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
-                                const GLchar* message, const void* userParam) {
+void GLAPIENTRY MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei, const GLchar* message,
+                                const void*) {
   fmt::print("GL error callback: source = {:X}, type = {:X}, id = {}, severity = {:X}, message = \'{}\'\n", source,
              type, id, severity, message);
 }
