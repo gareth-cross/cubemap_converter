@@ -20,7 +20,7 @@
 
 namespace images {
 
-std::optional<SimpleImage> LoadPng(const std::filesystem::path& path, const ImageDepth expected_depth) {
+SimpleImage LoadPng(const std::filesystem::path& path, const ImageDepth expected_depth) {
   const std::string path_str = path.u8string();
   ASSERT(expected_depth != ImageDepth::Bits32, "Cannot load 32 bit images w/ stb.");
 
@@ -45,8 +45,7 @@ std::optional<SimpleImage> LoadPng(const std::filesystem::path& path, const Imag
     image.Allocate();
     std::memcpy(&image.data[0], data.get(), image.data.size());
   }
-
-  return {std::move(image)};
+  return image;
 }
 
 void ErrorFunc(png_structp const ctx, png_const_charp const message) {
@@ -152,23 +151,33 @@ SimpleImage LoadRawFloatImage(const std::filesystem::path& path, const int width
   return image;
 }
 
-std::vector<std::optional<SimpleImage>> LoadCubemapImages(const std::filesystem::path& dataset_root,
-                                                          const std::size_t image_index, const std::size_t camera_index,
-                                                          const CubemapType type) {
-  constexpr std::array<std::size_t, 6> faces = {0, 1, 2, 3, 4, 5};
-  const std::string_view sub_folder = (type == CubemapType::Rgb) ? "image" : "depth";
+std::vector<SimpleImage> LoadCubemapImages(const std::filesystem::path& dataset_root, const std::size_t image_index,
+                                           const std::size_t camera_index, const bool parallelize) {
+  // 6 for RGB, 6 for depth
+  // Having a thread pool of producers feeding the GPU would be smarter, but this is a first
+  // order thing we can do to get some improvement.
+  constexpr std::array<std::size_t, 12> faces = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
   // load pngs in parallel:
-  std::vector<std::optional<SimpleImage>> images_out{faces.size()};
-  std::transform(std::execution::parallel_unsequenced_policy{}, faces.begin(), faces.end(), images_out.begin(),
-                 [&](const std::size_t face_index) {
-                   // Path to the specific sub-image
-                   const std::filesystem::path path = dataset_root / sub_folder /
-                                                      fmt::format("camera{:02}", camera_index) /
-                                                      fmt::format("{:08}_{:02}.png", image_index, face_index);
-                   // 8-bit for color, 16-bit for inverse depth:
-                   return images::LoadPng(path, type == CubemapType::Rgb ? ImageDepth::Bits8 : ImageDepth::Bits16);
-                 });
+  std::vector<SimpleImage> images_out{faces.size()};
+
+  auto lambda = [&](const std::size_t face_index) {
+    // Is this RGB or depth?
+    const bool is_depth = face_index >= 6;
+    const std::string_view sub_folder = is_depth ? "depth" : "image";
+    const std::filesystem::path path = dataset_root / sub_folder / fmt::format("camera{:02}", camera_index) /
+                                       fmt::format("{:08}_{:02}.png", image_index, face_index % 6);
+    // 8-bit for color, 16-bit for inverse depth:
+    return images::LoadPng(path, is_depth ? ImageDepth::Bits16 : ImageDepth::Bits8);
+  };
+
+  if (parallelize) {
+    std::transform(std::execution::parallel_unsequenced_policy{}, faces.begin(), faces.end(), images_out.begin(),
+                   std::move(lambda));
+  } else {
+    std::transform(std::execution::sequenced_policy{}, faces.begin(), faces.end(), images_out.begin(),
+                   std::move(lambda));
+  }
   return images_out;
 }
 

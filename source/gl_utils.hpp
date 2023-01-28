@@ -7,11 +7,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "assertions.hpp"
+#include "images.hpp"
 
-namespace images {
-struct SimpleImage;
-}
-
+// A few simple utilities to manage OpenGL resources.
 namespace gl_utils {
 
 // Simple "unique_ptr" imitation for use w/ OpenGL handles.
@@ -77,10 +75,10 @@ ShaderProgram CompileShaderProgram(std::string_view vertex_source, std::string_v
 // Wrapper for texture.
 struct Texture2D : public OpenGLHandle {
   Texture2D();
-  explicit Texture2D(const struct images::SimpleImage& image);
+  explicit Texture2D(const images::SimpleImage& image);
 
   // Fill the texture from an image.
-  void Fill(const struct images::SimpleImage& image);
+  void Fill(const images::SimpleImage& image);
 };
 
 // Wrapper for cubemap texture.
@@ -88,10 +86,76 @@ struct TextureCube : public OpenGLHandle {
   TextureCube();
 
   // Fill the specified face w/ the provided image.
-  void Fill(int face, const struct images::SimpleImage& image);
+  void Fill(int face, const images::SimpleImage& image);
 
  private:
   int dimension_{0};
+};
+
+// A simple "full screen quad" object.
+struct FullScreenQuad {
+  // Initialize all buffers.
+  FullScreenQuad();
+
+  // Render the quad w/ the provided program.
+  void Draw(const ShaderProgram& program) const;
+
+ private:
+  OpenGLHandle vertex_array_;
+  OpenGLHandle vertex_buffer_;
+  OpenGLHandle index_buffer_;
+};
+
+// Color-only framebuffer we render to.
+struct FramebufferObject {
+  // Allocate the FBO.
+  FramebufferObject(int width, int height);
+
+  // Bind, invoke, and unbind.
+  template <typename Func>
+  void RenderInto(Func&& func) const {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_.Handle());
+    std::invoke(std::forward<Func>(func));
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+
+  // Get texture handle for the color buffer.
+  [[nodiscard]] GLuint TextureHandle() const { return texture_.Handle(); }
+
+  // Read the contents of the color buffer back.
+  [[nodiscard]] images::SimpleImage ReadContents(int channels, images::ImageDepth depth) const;
+
+  // Read the contents of the buffer into PBO.
+  void ReadIntoPixelbuffer(int channel, images::ImageDepth depth, GLuint buffer_handle) const;
+
+ private:
+  OpenGLHandle fbo_;
+  OpenGLHandle texture_;
+  int width_;
+  int height_;
+};
+
+// Store a queue of PBOs. We can asynchronously queue reads.
+struct PixelbufferQueue {
+ public:
+  // Unique identifier for each pixel buffer - we just use the image index in the dataset.
+  using Key = std::size_t;
+
+  // Allocate queue of buffers (all have to be the same type for now).
+  PixelbufferQueue(std::size_t num_buffers, int width, int height, int channels, images::ImageDepth depth);
+
+  // Queue a read from the framebuffer into the next available PBO.
+  // Returns the oldest read in the queue.
+  [[nodiscard]] std::optional<std::pair<Key, images::SimpleImage>> QueueReadFromFbo(Key key,
+                                                                                    const FramebufferObject& fbo);
+
+ private:
+  std::vector<OpenGLHandle> pbo_;
+  std::vector<std::pair<std::size_t, Key>> pending_reads_;
+  int width_;
+  int height_;
+  int channels_;
+  images::ImageDepth depth_;
 };
 
 // Get the rotation of a given cubemap face (DX convention). Returns the rotation matrix cube_R_face.

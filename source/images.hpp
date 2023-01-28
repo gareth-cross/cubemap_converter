@@ -28,6 +28,9 @@ struct SimpleImage {
     Allocate();
   }
 
+  // Is the image empty.
+  [[nodiscard]] bool IsEmpty() const { return data.empty(); }
+
   // Length of a row in bytes.
   [[nodiscard]] std::size_t Stride() const {
     return static_cast<std::size_t>(width) * static_cast<std::size_t>(depth) * static_cast<std::size_t>(components);
@@ -38,7 +41,7 @@ struct SimpleImage {
 };
 
 // Load a PNG image.
-std::optional<SimpleImage> LoadPng(const std::filesystem::path& path, ImageDepth expected_depth);
+SimpleImage LoadPng(const std::filesystem::path& path, ImageDepth expected_depth);
 
 // Write a PNG image.
 void WritePng(const std::filesystem::path& path, const SimpleImage& image, bool flip_vertical);
@@ -54,8 +57,7 @@ enum class CubemapType {
 };
 
 // Load all the cubemap images of a given type for the specified index.
-std::vector<std::optional<SimpleImage>> LoadCubemapImages(const std::filesystem::path& dataset_root,
-                                                          std::size_t image_index, std::size_t camera_index,
-                                                          CubemapType type);
+std::vector<SimpleImage> LoadCubemapImages(const std::filesystem::path& dataset_root, std::size_t image_index,
+                                           std::size_t camera_index, bool parallelize = false);
 
 }  // namespace images
