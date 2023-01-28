@@ -1,155 +1,312 @@
+// Copyright 2023 Gareth Cross
 #include <array>
+#include <chrono>
 #include <filesystem>
+#include <functional>
+#include <future>
 #include <optional>
-#include <string>
+#include <queue>
 #include <variant>
-
-#define GL_SILENCE_DEPRECATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STBI_NO_FAILURE_STRINGS
 
 #include <glad/gl.h>
 
 #include <GLFW/glfw3.h>
 #include <fmt/format.h>
-#include <stb_image.h>
-#include <stb_image_write.h>
 #include <CLI/CLI.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "assertions.hpp"
+#include "gl_utils.hpp"
+#include "images.hpp"
+#include "timing.hpp"
+
+// Include all the shaders, which we generate from the files in `shaders/*.glsl`
+#include "shaders/fragment_cubemap.hpp"
+#include "shaders/fragment_display.hpp"
+#include "shaders/vertex.hpp"
 
 static void glfw_error_callback(int error, const char* description) {
   fmt::print("GLFW error. Code = {}, Message = {}\n", error, description);
 }
 
-// Very simple image type.
-template <typename T>
-struct SimpleImage {
-  // Only two types supported here:
-  static_assert(std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>);
-
-  explicit SimpleImage(const std::filesystem::path& path) : data{nullptr, &stbi_image_free} {
-    // Delegate to either 16bit or 8bit implementation:
-    const std::string path_str = path.string();
-    if constexpr (std::is_same_v<T, uint16_t>) {
-      data.reset(stbi_load_16(path_str.c_str(), &width, &height, &components, 0));
-    } else {
-      data.reset(stbi_load(path_str.c_str(), &width, &height, &components, 0));
-    }
-    ASSERT(data.get(), "Failed to load image at path: {}", path.string());
-  }
-
-  [[nodiscard]] bool is_valid() const { return data.get() != nullptr; }
-
-  std::unique_ptr<T[], void (*)(void*)> data{};
-  int width{0};
-  int height{0};
-  int components{0};
-};
-
 // Group together all the input arguments.
 struct ProgramArgs {
   std::string input_path;
-  std::size_t index;
+  std::string output_path;
+  std::size_t num_images;
+  std::size_t camera_index;
+  std::string table_path;
+  int table_width;
+  int table_height;
+  bool enable_gl_debug;
+  std::string valid_mask_path;
 };
 
 // Parse program arts, or fail and return exit code.
 std::variant<ProgramArgs, int> ParseProgramArgs(int argc, char** argv) {
   CLI::App app{"Cubemap converter"};
   ProgramArgs args{};
-  app.add_option("-i,--input-path", args.input_path, "Path to the input dataset.")->required();
-  app.add_option("--index", args.index, "Index of the image to display.")->required();
-
   try {
+    app.add_option("-i,--input-path", args.input_path, "Path to the input dataset.")->required();
+    app.add_option("-o,--output-path", args.output_path, "Path to the output directory.");
+    app.add_option("--num-images", args.num_images, "Num images in the dataset.")->required();
+    app.add_option("-c,--camera-index", args.camera_index, "Index of the camera to render.")->required();
+    app.add_option("-t,--remap-table", args.table_path, "Path to the remap table.")->required();
+    app.add_option("--width", args.table_width, "Width of the native image.")->required();
+    app.add_option("--height", args.table_height, "Height of the native image.")->required();
+    app.add_flag("--debug", args.enable_gl_debug, "Enable OpenGL debug log (v4.3 or higher).");
+    app.add_option("--mask", args.valid_mask_path, "Optional valid mask image (png).");
     app.parse(argc, argv);
   } catch (const CLI::ParseError& e) {
     return app.exit(e);
+  } catch (const CLI::Error& e) {
+    fmt::print("Some other exception: {}", e.what());
+    return 1;
   }
   return args;
 }
 
-// Get appropriate OpenGL for the given face index.
-GLenum TargetForFace(int face) {
-  constexpr std::array<GLenum, 6> faces = {
-      GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X, GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
-      GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+gl_utils::Texture2D LoadValidMask(const std::string& mask_path, const int table_width, const int table_height) {
+  gl_utils::Texture2D texture{};
+  if (mask_path.empty()) {
+    // No mask, just put a white image in (valid everywhere).
+    images::SimpleImage white_image{table_width, table_height, 1, images::ImageDepth::Bits8};
+    std::fill(white_image.data.begin(), white_image.data.end(), 255);
+    texture.Fill(white_image);
+  } else {
+    std::optional<images::SimpleImage> mask_image = images::LoadPng(mask_path, images::ImageDepth::Bits8);
+    ASSERT(mask_image.has_value(), "Could not load valid mask from: {}", mask_path);
+    ASSERT(mask_image->width == table_width && mask_image->height == table_height,
+           "Remap table and valid mask do not share the same dimensions. mask = [{}, {}], table = [{}, {}]",
+           mask_image->width, mask_image->height, table_width, table_height);
+    texture.Fill(*mask_image);
+  }
+  return texture;
+}
+
+// A poor man's thread pool.
+template <typename T>
+struct TaskQueue {
+  explicit TaskQueue(std::size_t max) : max_items(max){};
+
+  // Push new task into the queue.
+  template <typename Function>
+  void Push(Function&& func) {
+    if (pending.size() == max_items) {
+      std::future<T> front = std::move(pending.front());
+      pending.pop();
+      front.wait();
+    }
+    pending.push(std::async(std::launch::async, std::forward<Function>(func)));
+  }
+
+  // Clear the queue of tasks.
+  void Flush() {
+    while (!pending.empty()) {
+      std::future<T> front = std::move(pending.front());
+      pending.pop();
+      front.wait();
+    }
+  }
+
+  std::queue<std::future<T>> pending{};
+  std::size_t max_items;
+};
+
+void CreateOrAssert(const std::filesystem::path& path) {
+  std::error_code err{};
+  // Recursively create directories:
+  const bool created = std::filesystem::create_directories(path, err);
+  ASSERT(created || !err, "Failed to create directory: `{}`. Error = {}", path.u8string(), err.message());
+}
+
+void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
+  ASSERT(args.table_width > 0 && args.table_height > 0, "Dimensions must be positive: w={}, h={}", args.table_width,
+         args.table_height);
+
+  // Path to the input directory:
+  const std::filesystem::path dataset{args.input_path};
+
+  // Create directories for the outputs:
+  const std::filesystem::path output_root{args.output_path};
+  const std::filesystem::path output_dir_rgb = output_root / "image" / fmt::format("camera{:02}", args.camera_index);
+  const std::filesystem::path output_dir_inv_range =
+      output_root / "range" / fmt::format("camera{:02}", args.camera_index);
+  CreateOrAssert(output_dir_rgb);
+  CreateOrAssert(output_dir_inv_range);
+
+  // Load the remap table.
+  const images::SimpleImage remap_table_img =
+      images::LoadRawFloatImage(args.table_path, args.table_width, args.table_height, 3);
+
+  // Copy remap table to GPU:
+  const gl_utils::Texture2D remap_table{remap_table_img};
+
+  // Load the valid mask
+  const gl_utils::Texture2D valid_mask = LoadValidMask(args.valid_mask_path, args.table_width, args.table_height);
+
+  // Create a cube-map (initially empty)
+  gl_utils::TextureCube rgb_cube{};
+  gl_utils::TextureCube inv_depth_cube{};
+
+  // Create shader for building native image:
+  const gl_utils::ShaderProgram cubemap_shader_program =
+      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_cubemap);
+
+  // Create shader for displaying the native image in the UI:
+  const gl_utils::ShaderProgram display_program =
+      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_display);
+
+  // Create projection matrix:
+  const glm::mat4x4 projection = glm::ortho(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f);
+  cubemap_shader_program.SetMatrixUniform("projection", projection);
+  display_program.SetMatrixUniform("projection", projection);
+
+  // The rotation from a DirectX camera to an unreal camera: (UE cam has +x forward, per their pawn convention).
+  constexpr glm::fquat unreal_cam_R_directx_cam = glm::fquat{0.5f, 0.5f, 0.5f, 0.5f};
+  cubemap_shader_program.SetMatrixUniform("cubemap_R_camera", glm::mat3_cast(unreal_cam_R_directx_cam));
+
+  // A VBO w/ a quad we can draw to fill the screen:
+  const gl_utils::FullScreenQuad quad{};
+
+  // Create a frame buffer to render into:
+  const int texture_width = args.table_width;
+  const int texture_height = args.table_height;
+
+  // Cull clockwise back-faces
+  glEnable(GL_CULL_FACE);
+  glCullFace(GL_BACK);
+  glFrontFace(GL_CCW);
+
+  // Enable seamless cubemaps
+  glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
+  // Wrap some logic we call repeatedly in the loop below:
+  const auto draw_to_fbo = [&](bool is_depth) {
+    glViewport(0, 0, texture_width, texture_height);
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, remap_table.Handle());
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, is_depth ? inv_depth_cube.Handle() : rgb_cube.Handle());
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, valid_mask.Handle());
+
+    // Tell the shader what we are rendering:
+    cubemap_shader_program.SetUniformInt("remap_table", 0);
+    cubemap_shader_program.SetUniformInt("input_cube", 1);
+    cubemap_shader_program.SetUniformInt("valid_mask", 2);
+    cubemap_shader_program.SetUniformInt("is_depth", is_depth);
+
+    quad.Draw(cubemap_shader_program);
   };
-  ASSERT(face >= 0 && face < 6, "Invalid face: {}", face);
-  return faces[face];
-}
 
-static const char* vertex_source = R"(
-#version 330 core
-layout(location = 0) in vec3 pos;
-layout(location = 1) in vec2 uv;
+  // Render the cubemap to texture (first for color):
+  const gl_utils::FramebufferObject rgb_fbo{texture_width, texture_height};
+  const gl_utils::FramebufferObject inv_range_fbo{texture_width, texture_height};
 
-uniform mat4 projection;
+  // We'll render to FBO then read the previous frame before queueing another read:
+  gl_utils::PixelbufferQueue color_pbos{1, texture_width, texture_height, 3, images::ImageDepth::Bits8};
+  gl_utils::PixelbufferQueue inv_range_pbos{1, texture_width, texture_height, 1, images::ImageDepth::Bits16};
 
-out vec2 TexCoords;
+  // Queue of tasks for writing images (poor man's thread pool).
+  constexpr std::size_t max_writers = 8;
+  TaskQueue<void> write_queue(max_writers);
 
-void main() {
-  gl_Position = projection * vec4(pos.x, pos.y, pos.z, 1.0);
-  TexCoords = uv;
-}
-)";
+  // Main loop
+  timing::SimpleTimer timer{};
+  std::size_t next_index = 0;
+  while (!glfwWindowShouldClose(window)) {
+    glfwPollEvents();
 
-static const char* fragment_source = R"(
-#version 330 core
-out vec4 FragColor;
+    // Load the cubemap faces:
+    // TODO: We'd get better GPU usage if this was a thread pool.
+    std::vector<images::SimpleImage> faces;
+    timer.Record(timing::SimpleTimer::Stages::Load,
+                 [&]() { faces = images::LoadCubemapImages(dataset, next_index, args.camera_index, true); });
 
-in vec2 TexCoords;
+    // Copy the RGB + depth data:
+    timer.Record(timing::SimpleTimer::Stages::Unpack, [&] {
+      for (int face = 0; face < 6; ++face) {
+        ASSERT(!faces[face].IsEmpty(), "Failed to load RGB cubemap face: {}, index = {}", face, next_index);
+        rgb_cube.Fill(face, faces[face]);
+      }
+      for (int face = 0; face < 6; ++face) {
+        ASSERT(!faces[face].IsEmpty(), "Failed to load inverse depth cubemap face: {}, index = {}", face, next_index);
+        inv_depth_cube.Fill(face, faces[face + 6]);
+      }
+    });
 
-void main() {
-  FragColor = vec4(TexCoords.x, TexCoords.y, 0.0f, 1.0f);
-}
-)";
+    // Render to the FBO:
+    timer.Record(timing::SimpleTimer::Stages::Render, [&] {
+      rgb_fbo.RenderInto([&]() { draw_to_fbo(false); });
+      inv_range_fbo.RenderInto([&]() { draw_to_fbo(true); });
+    });
 
-// Compile and link the shader.
-GLuint CompileShaderProgram() {
-  const GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertex_shader, 1, &vertex_source, nullptr);
-  glCompileShader(vertex_shader);
+    // Read it back:
+    std::optional<std::pair<std::size_t, images::SimpleImage>> previous_rgb_read{};
+    std::optional<std::pair<std::size_t, images::SimpleImage>> previous_inv_range_read{};
+    timer.Record(timing::SimpleTimer::Stages::Pack, [&] {
+      previous_rgb_read = color_pbos.QueueReadFromFbo(next_index, rgb_fbo);
+      previous_inv_range_read = inv_range_pbos.QueueReadFromFbo(next_index, inv_range_fbo);
+    });
 
-  // check if vertex shader compiled:
-  GLint success;
-  std::string compiler_log;
-  compiler_log.resize(1024);
-  glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &success);
-  if (!success) {
-    glGetShaderInfoLog(vertex_shader, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to compile vertex shader. Reason: {}", compiler_log);
+    // Write the data out (if the user specified a path).
+    if (previous_rgb_read && !args.output_path.empty()) {
+      const std::size_t read_index = previous_rgb_read->first;
+      ASSERT(read_index < next_index);  //  This should be an earlier frame.
+      timer.Record(timing::SimpleTimer::Stages::Write, [&] {
+        write_queue.Push([read_index, rgb = std::move(previous_rgb_read->second),
+                          inv_range = std::move(previous_inv_range_read->second), &output_dir_rgb,
+                          &output_dir_inv_range] {
+          images::WritePng(output_dir_rgb / fmt::format("{:08}.png", read_index), rgb, true);
+          images::WritePng(output_dir_inv_range / fmt::format("{:08}.png", read_index), inv_range, true);
+        });
+      });
+    }
+
+    // Set up the main viewport so the user sees the result:
+    int display_w, display_h;
+    glfwGetFramebufferSize(window, &display_w, &display_h);
+    glViewport(0, 0, display_w, display_h);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // These variables ensure we render with the correct aspect ratio:
+    display_program.SetUniformVec2("viewport_dims", glm::vec2(display_w, display_h));
+    display_program.SetUniformVec2("image_dims", glm::vec2(texture_width, texture_height));
+    display_program.SetUniformInt("image", 0);
+
+    // Draw the image to the screen:
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, rgb_fbo.TextureHandle());
+    quad.Draw(display_program);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glfwSwapBuffers(window);
+
+    // Increment the index:
+    ++next_index;
+    if (next_index == args.num_images) {
+      break;  //  We can stop.
+    }
   }
 
-  // fragment shader
-  const GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragment_shader, 1, &fragment_source, nullptr);
-  glCompileShader(fragment_shader);
+  write_queue.Flush();  // Wait for writing to complete.
+  fmt::print("Processed {} images.\n", next_index + 1);
+  timer.Summarize();
+}
 
-  // check for shader compile errors
-  glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &success);
-  if (!success) {
-    glGetShaderInfoLog(fragment_shader, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to compile fragment shader. Reason: {}", compiler_log);
-  }
-
-  // link shaders
-  GLuint program = glCreateProgram();
-  glAttachShader(program, vertex_shader);
-  glAttachShader(program, fragment_shader);
-  glLinkProgram(program);
-
-  // check for linking errors
-  glGetProgramiv(program, GL_LINK_STATUS, &success);
-  if (!success) {
-    glGetProgramInfoLog(program, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to link shader. Reason: {}", compiler_log);
-  }
-  glDeleteShader(vertex_shader);
-  glDeleteShader(fragment_shader);
-  return program;
+// Callback to update viewport.
+void WindowSizeCallback(GLFWwindow* const window, int, int) {
+  int display_w, display_h;
+  glfwGetFramebufferSize(window, &display_w, &display_h);
+  glViewport(0, 0, display_w, display_h);
 }
 
 int Run(const ProgramArgs& args) {
@@ -161,7 +318,7 @@ int Run(const ProgramArgs& args) {
   }
 
   // GL 3.3
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
@@ -169,7 +326,7 @@ int Run(const ProgramArgs& args) {
 #endif
 
   // Create window with graphics context
-  GLFWwindow* window = glfwCreateWindow(1280, 720, "Cubemap converter", nullptr, nullptr);
+  GLFWwindow* const window = glfwCreateWindow(1280, 720, "Cubemap converter", nullptr, nullptr);
   if (window == nullptr) {
     fmt::print("Failed to create GLFW window\n");
     return 1;
@@ -178,165 +335,21 @@ int Run(const ProgramArgs& args) {
 
   // print the version of OpenGL:
   const int glad_version = gladLoadGL(glfwGetProcAddress);
-  fmt::print("Using OpenGL {}.{}\n", GLAD_VERSION_MAJOR(glad_version), GLAD_VERSION_MINOR(glad_version));
+  fmt::print("Using OpenGL {}.{} (GLAD generator = v{})\n", GLAD_VERSION_MAJOR(glad_version),
+             GLAD_VERSION_MINOR(glad_version), GLAD_GENERATOR_VERSION);
 
-  // Enable vsync
-  glfwSwapInterval(1);
+  // vsync slows things down a fair bit
+  constexpr bool vsync = false;
+  glfwSwapInterval(static_cast<int>(vsync));
+  glfwSetWindowSizeCallback(window, WindowSizeCallback);
 
-  // Enable seamless cubemaps
-  glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
-
-  // Load a cubemap
-  GLuint texture_handle{0};
-  glGenTextures(1, &texture_handle);
-  ASSERT(texture_handle, "Failed to create texture handle");
-  glBindTexture(GL_TEXTURE_CUBE_MAP, texture_handle);
-
-  const std::filesystem::path dataset{args.input_path};
-  for (int face = 0; face < 6; ++face) {
-    // Load the image
-    const std::filesystem::path input_path =
-        dataset / "image" / "camera00" / fmt::format("{:08}_{:02}.png", args.index, face);
-    const SimpleImage<uint8_t> image{input_path};
-
-    if (face == 0) {
-      // Allocate cubemap:
-      glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGB32F, image.width, image.height);
-    }
-
-    // Copy face to GPU:
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexSubImage2D(TargetForFace(face), 0, 0, 0, image.width, image.height, GL_RGB, GL_UNSIGNED_BYTE,
-                    image.data.get());
+  // print errors
+  if (args.enable_gl_debug) {
+    gl_utils::EnableDebugOutput(glad_version);
   }
 
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-  // Create shader for displaying cubemap
-  const GLuint shader_program = CompileShaderProgram();
-
-  // Create projection matrix:
-  const glm::mat4x4 projection = glm::ortho(0.0f, 1.0f, 0.0f, 1.0f, -1.0f, 1.0f);
-  glUseProgram(shader_program);
-  const GLint projection_uniform = glGetUniformLocation(shader_program, "projection");
-  ASSERT(projection_uniform != -1, "Failed to find uniform");
-  glUniformMatrix4fv(projection_uniform, 1, GL_FALSE, &projection[0][0]);
-
-  // Create a quad in a buffer.
-  // The viewport is configured so that bottom left is [0, 0] and top right is [1, 1].
-  // Vertices are packed as [x, y, z, u, v].
-  // clang-format off
-  const std::array<float, 5 * 4> vertices = {
-      1.0f, 1.0f, 0.0f,    1.0f, 1.0f,  // top right
-      1.0f, 0.0f, 0.0f,    1.0f, 0.0f,  // bottom right
-      0.0f, 0.0f, 0.0f,    0.0f, 0.0f,  // bottom left
-      0.0f, 1.0f, 0.0f,    0.0f, 1.0f,  // top left
-  };
-  const std::array<unsigned int, 6> triangles = {
-      1, 0, 3,
-      3, 2, 1
-  };
-  // clang-format on
-
-  // Create buffers
-  GLuint vertex_buffer, vertex_array, index_buffer;
-  glGenVertexArrays(1, &vertex_array);
-  glGenBuffers(1, &vertex_buffer);
-  glGenBuffers(1, &index_buffer);
-  glBindVertexArray(vertex_array);
-
-  // Send vertex data.
-  glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(float) * vertices.size(), &vertices[0], GL_STATIC_DRAW);
-
-  // Send triangle data
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(unsigned int) * triangles.size(), &triangles[0], GL_STATIC_DRAW);
-
-  // Specify how vertices are arranged in the buffer:
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
-  glEnableVertexAttribArray(0);
-
-  // Specify how texture coordinates are arranged in the buffer:
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
-  glEnableVertexAttribArray(1);
-
-  // Unbind
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glBindVertexArray(0);
-
-  // Create a frame buffer to render into:
-  GLuint frame_buffer;
-  glGenFramebuffers(1, &frame_buffer);
-  ASSERT(frame_buffer);
-  glBindFramebuffer(GL_FRAMEBUFFER, frame_buffer);
-
-  // Color buffer for the fbo:
-  GLuint color_buffer_texture;
-  glGenTextures(1, &color_buffer_texture);
-  ASSERT(color_buffer_texture);
-  glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
-
-  const int texture_width = 640;
-  const int texture_height = 480;
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_buffer_texture, 0);
-  const GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-  ASSERT(fbo_status == GL_FRAMEBUFFER_COMPLETE, "FBO is not complete, status = {}", fbo_status);
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-  // Cull clockwise back-faces
-  glEnable(GL_CULL_FACE);
-  glCullFace(GL_BACK);
-  glFrontFace(GL_CCW);
-
-  // Main loop
-  while (!glfwWindowShouldClose(window)) {
-    glfwPollEvents();
-
-    // render to texture
-    glBindFramebuffer(GL_FRAMEBUFFER, frame_buffer);
-    glViewport(0, 0, texture_width, texture_height);
-    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDisable(GL_DEPTH_TEST);
-
-    glUseProgram(shader_program);
-    glBindVertexArray(vertex_array);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
-
-    // done drawing to fbo
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    // Set up the main viewport
-    int display_w, display_h;
-    glfwGetFramebufferSize(window, &display_w, &display_h);
-    glViewport(0, 0, display_w, display_h);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    //    glUseProgram(shader_program);
-    //    glBindVertexArray(vertex_array);
-    //    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-    glfwSwapBuffers(window);
-  }
-
-  // Read contents of the RGB buffer back:
-  std::vector<uint8_t> rgb_data(texture_width * texture_height * 3);
-  glBindTexture(GL_TEXTURE_2D, color_buffer_texture);
-  glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, &rgb_data[0]);
-
-  // Save it out
-  // TODO: Flip the order here.
-  fmt::print("Saving image out!");
-  const int success = stbi_write_png("output.png", texture_width, texture_height, 3, &rgb_data[0], texture_width * 3);
-  ASSERT(success, "Failed to write output png");
+  // Render until the window closes:
+  ExecuteMainLoop(args, window);
 
   glfwDestroyWindow(window);
   glfwTerminate();

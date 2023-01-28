@@ -13,3 +13,6 @@
 [submodule "dependencies/glm"]
 	path = dependencies/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "dependencies/scope_guard"]
+	path = dependencies/scope_guard
+	url = https://github.com/ricab/scope_guard.git
