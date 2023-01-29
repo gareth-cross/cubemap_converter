@@ -106,10 +106,17 @@ struct FullScreenQuad {
   OpenGLHandle index_buffer_;
 };
 
+enum class FramebufferType {
+  // Allocate a 32-bit RGBA buffer.
+  Color,
+  // Allocate a 16-bit R buffer.
+  InverseRange,
+};
+
 // Color-only framebuffer we render to.
 struct FramebufferObject {
   // Allocate the FBO.
-  FramebufferObject(int width, int height);
+  FramebufferObject(int width, int height, FramebufferType type);
 
   // Bind, invoke, and unbind.
   template <typename Func>

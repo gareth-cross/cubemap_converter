@@ -208,12 +208,13 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   };
 
   // Render the cubemap to texture (first for color):
-  const gl_utils::FramebufferObject rgb_fbo{texture_width, texture_height};
-  const gl_utils::FramebufferObject inv_range_fbo{texture_width, texture_height};
+  const gl_utils::FramebufferObject rgb_fbo{texture_width, texture_height, gl_utils::FramebufferType::Color};
+  const gl_utils::FramebufferObject inv_range_fbo{texture_width, texture_height,
+                                                  gl_utils::FramebufferType::InverseRange};
 
   // We'll render to FBO then read the previous frame before queueing another read:
-  gl_utils::PixelbufferQueue color_pbos{1, texture_width, texture_height, 3, images::ImageDepth::Bits8};
-  gl_utils::PixelbufferQueue inv_range_pbos{1, texture_width, texture_height, 1, images::ImageDepth::Bits16};
+  gl_utils::PixelbufferQueue color_pbos{2, texture_width, texture_height, 3, images::ImageDepth::Bits8};
+  gl_utils::PixelbufferQueue inv_range_pbos{2, texture_width, texture_height, 1, images::ImageDepth::Bits16};
 
   // Queue of tasks for writing images (poor man's thread pool).
   constexpr std::size_t max_writers = 8;

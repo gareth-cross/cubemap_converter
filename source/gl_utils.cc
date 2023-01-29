@@ -122,8 +122,16 @@ static GLenum GetTextureRepresentation(const int channels, const images::ImageDe
 }
 
 static GLenum GetTextureInputFormat(const int channels) {
-  ASSERT(channels == 1 || channels == 3, "Invalid # of channels: {}", channels);
-  return channels == 1 ? GL_RED : GL_RGB;
+  switch (channels) {
+    case 1:
+      return GL_RED;
+    case 3:
+      return GL_RGB;
+    default:
+      break;
+  }
+  ASSERT(channels == 4, "Channels must be [1, 3, 4]. channels = {}", channels);
+  return GL_RGBA;
 }
 
 static constexpr GLenum GetTextureDataType(const images::ImageDepth depth) {
@@ -268,7 +276,7 @@ inline GLuint CreateFramebuffer() {
   return fbo;
 }
 
-FramebufferObject::FramebufferObject(const int width, const int height)
+FramebufferObject::FramebufferObject(const int width, const int height, const FramebufferType type)
     : fbo_(CreateFramebuffer(), [](GLuint x) noexcept { glDeleteFramebuffers(1, &x); }),
       texture_(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }),
       width_(width),
@@ -279,7 +287,8 @@ FramebufferObject::FramebufferObject(const int width, const int height)
   glBindTexture(GL_TEXTURE_2D, texture_.Handle());
 
   // Allocate storage.
-  glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, width_, height_);
+  const GLenum storage_format = (type == FramebufferType::Color) ? GL_RGBA8 : GL_R16;
+  glTexStorage2D(GL_TEXTURE_2D, 1, storage_format, width_, height_);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
