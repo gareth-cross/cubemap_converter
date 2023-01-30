@@ -122,8 +122,16 @@ static GLenum GetTextureRepresentation(const int channels, const images::ImageDe
 }
 
 static GLenum GetTextureInputFormat(const int channels) {
-  ASSERT(channels == 1 || channels == 3, "Invalid # of channels: {}", channels);
-  return channels == 1 ? GL_RED : GL_RGB;
+  switch (channels) {
+    case 1:
+      return GL_RED;
+    case 3:
+      return GL_RGB;
+    default:
+      break;
+  }
+  ASSERT(channels == 4, "Channels must be [1, 3, 4]. channels = {}", channels);
+  return GL_RGBA;
 }
 
 static constexpr GLenum GetTextureDataType(const images::ImageDepth depth) {
@@ -268,7 +276,7 @@ inline GLuint CreateFramebuffer() {
   return fbo;
 }
 
-FramebufferObject::FramebufferObject(const int width, const int height)
+FramebufferObject::FramebufferObject(const int width, const int height, const FramebufferType type)
     : fbo_(CreateFramebuffer(), [](GLuint x) noexcept { glDeleteFramebuffers(1, &x); }),
       texture_(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }),
       width_(width),
@@ -279,7 +287,8 @@ FramebufferObject::FramebufferObject(const int width, const int height)
   glBindTexture(GL_TEXTURE_2D, texture_.Handle());
 
   // Allocate storage.
-  glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, width_, height_);
+  const GLenum storage_format = (type == FramebufferType::Color) ? GL_RGBA8 : GL_R16;
+  glTexStorage2D(GL_TEXTURE_2D, 1, storage_format, width_, height_);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -326,52 +335,49 @@ PixelbufferQueue::PixelbufferQueue(std::size_t num_buffers, const int width, con
                                    const images::ImageDepth depth)
     : channels_(channels), depth_(depth), width_(width), height_(height) {
   ASSERT(num_buffers > 0);
-  pbo_.reserve(num_buffers);
-  pending_reads_.reserve(num_buffers);
+  pbo_pool_.reserve(num_buffers);
   for (std::size_t i = 0; i < num_buffers; ++i) {
-    pbo_.emplace_back(CreatePixelBuffer(), [](GLuint x) noexcept { glDeleteBuffers(1, &x); });
+    pbo_pool_.emplace_back(CreatePixelBuffer(), [](GLuint x) noexcept { glDeleteBuffers(1, &x); });
   }
   // Allocate the buffers:
-  for (const OpenGLHandle& buffer : pbo_) {
+  for (const OpenGLHandle& buffer : pbo_pool_) {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer.Handle());
     glBufferData(GL_PIXEL_PACK_BUFFER, width * height * channels * static_cast<int>(depth), nullptr, GL_STREAM_READ);
   }
   glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 }
 
-std::optional<std::pair<PixelbufferQueue::Key, images::SimpleImage>> PixelbufferQueue::QueueReadFromFbo(
-    const Key new_key, const FramebufferObject& fbo) {
-  std::optional<std::pair<PixelbufferQueue::Key, images::SimpleImage>> result{};
-  if (pending_reads_.size() < pbo_.size()) {
-    // The queue is not full, so put this in the next available slot.
-    const std::size_t read_index = pending_reads_.size();
-    fbo.ReadIntoPixelbuffer(channels_, depth_, pbo_[read_index].Handle());
-    pending_reads_.emplace_back(read_index, new_key);
-  } else {
-    // We need to pop a read from the front of the queue
-    const auto [read_index, returned_key] = pending_reads_.front();
-    pending_reads_.erase(pending_reads_.begin());
-    ASSERT(read_index < pbo_.size());
+void PixelbufferQueue::QueueReadFromFbo(const FramebufferObject& fbo) {
+  ASSERT(!QueueIsFull(), "Queue is full");
+  // Take the next PBO and queue a read:
+  OpenGLHandle pbo = std::move(pbo_pool_.back());
+  pbo_pool_.pop_back();
+  fbo.ReadIntoPixelbuffer(channels_, depth_, pbo.Handle());
+  pending_reads_.push(std::move(pbo));
+}
 
-    // Bind it fetch the data:
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_[read_index].Handle());
-    const void* mapped = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-    ASSERT(mapped, "Failed to map PBO");
+images::SimpleImage PixelbufferQueue::PopOldestRead() {
+  ASSERT(HasPendingReads(), "No pending reads left (queue is empty)");
 
-    // Copy it out to an image and place it in `result` so we return something:
-    images::SimpleImage output_image{width_, height_, channels_, depth_};
-    std::memcpy(&output_image.data[0], mapped, output_image.data.size());
-    result.emplace(returned_key, std::move(output_image));
+  OpenGLHandle pbo = std::move(pending_reads_.front());
+  pending_reads_.pop();
 
-    // Unmap the buffer.
-    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  // Bind it fetch the data:
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo.Handle());
+  const void* mapped = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+  ASSERT(mapped, "Failed to map PBO");
 
-    // Queue another read w/ the new key:
-    fbo.ReadIntoPixelbuffer(channels_, depth_, pbo_[read_index].Handle());
-    pending_reads_.emplace_back(read_index, new_key);
-  }
-  return result;
+  // Allocate and return the result:
+  images::SimpleImage output_image{width_, height_, channels_, depth_};
+  std::memcpy(&output_image.data[0], mapped, output_image.data.size());
+
+  // Unmap the buffer.
+  glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+  // Put it back into the pile:
+  pbo_pool_.push_back(std::move(pbo));
+  return output_image;
 }
 
 void GLAPIENTRY MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei, const GLchar* message,

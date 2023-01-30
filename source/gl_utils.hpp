@@ -1,6 +1,7 @@
 // Copyright 2023 Gareth Cross
 #pragma once
 #include <array>
+#include <queue>
 
 #include <glad/gl.h>
 #include <glm/glm.hpp>
@@ -37,14 +38,25 @@ struct OpenGLHandle {
     other.handle_ = 0;
   }
 
-  ~OpenGLHandle() {
+  // Move assign.
+  OpenGLHandle& operator=(OpenGLHandle&& other) noexcept {
+    Cleanup();
+    handle_ = other.handle_;
+    deleter_ = other.deleter_;
+    other.handle_ = 0;
+    return *this;
+  }
+
+  ~OpenGLHandle() { Cleanup(); }
+
+ private:
+  void Cleanup() noexcept {
     if (handle_) {
       std::invoke(deleter_, handle_);
       handle_ = 0;
     }
   }
 
- private:
   GLuint handle_{0};
   void (*deleter_)(GLuint) noexcept {nullptr};
 };
@@ -106,10 +118,17 @@ struct FullScreenQuad {
   OpenGLHandle index_buffer_;
 };
 
+enum class FramebufferType {
+  // Allocate a 32-bit RGBA buffer.
+  Color,
+  // Allocate a 16-bit R buffer.
+  InverseRange,
+};
+
 // Color-only framebuffer we render to.
 struct FramebufferObject {
   // Allocate the FBO.
-  FramebufferObject(int width, int height);
+  FramebufferObject(int width, int height, FramebufferType type);
 
   // Bind, invoke, and unbind.
   template <typename Func>
@@ -138,20 +157,24 @@ struct FramebufferObject {
 // Store a queue of PBOs. We can asynchronously queue reads.
 struct PixelbufferQueue {
  public:
-  // Unique identifier for each pixel buffer - we just use the image index in the dataset.
-  using Key = std::size_t;
-
   // Allocate queue of buffers (all have to be the same type for now).
   PixelbufferQueue(std::size_t num_buffers, int width, int height, int channels, images::ImageDepth depth);
 
+  // Check if the queue is full.
+  [[nodiscard]] bool QueueIsFull() const { return pbo_pool_.empty(); }
+
+  // True if there are pending reads to process.
+  [[nodiscard]] bool HasPendingReads() const { return !pending_reads_.empty(); }
+
   // Queue a read from the framebuffer into the next available PBO.
-  // Returns the oldest read in the queue.
-  [[nodiscard]] std::optional<std::pair<Key, images::SimpleImage>> QueueReadFromFbo(Key key,
-                                                                                    const FramebufferObject& fbo);
+  void QueueReadFromFbo(const FramebufferObject& fbo);
+
+  // Complete the oldest read and return the resulting image.
+  images::SimpleImage PopOldestRead();
 
  private:
-  std::vector<OpenGLHandle> pbo_;
-  std::vector<std::pair<std::size_t, Key>> pending_reads_;
+  std::vector<OpenGLHandle> pbo_pool_;
+  std::queue<OpenGLHandle> pending_reads_;
   int width_;
   int height_;
   int channels_;

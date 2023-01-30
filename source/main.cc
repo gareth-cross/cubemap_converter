@@ -208,12 +208,16 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   };
 
   // Render the cubemap to texture (first for color):
-  const gl_utils::FramebufferObject rgb_fbo{texture_width, texture_height};
-  const gl_utils::FramebufferObject inv_range_fbo{texture_width, texture_height};
+  const gl_utils::FramebufferObject rgb_fbo{texture_width, texture_height, gl_utils::FramebufferType::Color};
+  const gl_utils::FramebufferObject inv_range_fbo{texture_width, texture_height,
+                                                  gl_utils::FramebufferType::InverseRange};
 
   // We'll render to FBO then read the previous frame before queueing another read:
-  gl_utils::PixelbufferQueue color_pbos{1, texture_width, texture_height, 3, images::ImageDepth::Bits8};
-  gl_utils::PixelbufferQueue inv_range_pbos{1, texture_width, texture_height, 1, images::ImageDepth::Bits16};
+  gl_utils::PixelbufferQueue color_pbos{2, texture_width, texture_height, 3, images::ImageDepth::Bits8};
+  gl_utils::PixelbufferQueue inv_range_pbos{2, texture_width, texture_height, 1, images::ImageDepth::Bits16};
+
+  // Indices of images we haven't read back from the GPU yet.
+  std::queue<std::size_t> queued_indices{};
 
   // Queue of tasks for writing images (poor man's thread pool).
   constexpr std::size_t max_writers = 8;
@@ -250,21 +254,30 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     });
 
     // Read it back:
-    std::optional<std::pair<std::size_t, images::SimpleImage>> previous_rgb_read{};
-    std::optional<std::pair<std::size_t, images::SimpleImage>> previous_inv_range_read{};
+    std::size_t read_index = std::numeric_limits<std::size_t>::max();
+    images::SimpleImage previous_rgb_read{};
+    images::SimpleImage previous_inv_range_read{};
     timer.Record(timing::SimpleTimer::Stages::Pack, [&] {
-      previous_rgb_read = color_pbos.QueueReadFromFbo(next_index, rgb_fbo);
-      previous_inv_range_read = inv_range_pbos.QueueReadFromFbo(next_index, inv_range_fbo);
+      if (color_pbos.QueueIsFull()) {
+        // We've filled the queue, we need to de-queue the oldest reads:
+        ASSERT(inv_range_pbos.QueueIsFull());
+        previous_rgb_read = color_pbos.PopOldestRead();
+        previous_inv_range_read = inv_range_pbos.PopOldestRead();
+        read_index = queued_indices.front();
+        queued_indices.pop();
+      }
+      // Queue a read for this frame:
+      color_pbos.QueueReadFromFbo(rgb_fbo);
+      inv_range_pbos.QueueReadFromFbo(inv_range_fbo);
+      queued_indices.push(next_index);
     });
 
     // Write the data out (if the user specified a path).
-    if (previous_rgb_read && !args.output_path.empty()) {
-      const std::size_t read_index = previous_rgb_read->first;
+    if (!previous_rgb_read.IsEmpty() && !args.output_path.empty()) {
       ASSERT(read_index < next_index);  //  This should be an earlier frame.
       timer.Record(timing::SimpleTimer::Stages::Write, [&] {
-        write_queue.Push([read_index, rgb = std::move(previous_rgb_read->second),
-                          inv_range = std::move(previous_inv_range_read->second), &output_dir_rgb,
-                          &output_dir_inv_range] {
+        write_queue.Push([read_index, rgb = std::move(previous_rgb_read),
+                          inv_range = std::move(previous_inv_range_read), &output_dir_rgb, &output_dir_inv_range] {
           images::WritePng(output_dir_rgb / fmt::format("{:08}.png", read_index), rgb, true);
           images::WritePng(output_dir_inv_range / fmt::format("{:08}.png", read_index), inv_range, true);
         });
@@ -291,14 +304,28 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     glfwSwapBuffers(window);
 
     // Increment the index:
-    ++next_index;
-    if (next_index == args.num_images) {
+    if (next_index + 1 == args.num_images) {
       break;  //  We can stop.
+    } else {
+      ++next_index;
     }
   }
 
+  // Complete any pending reads:
+  while (!queued_indices.empty() && !args.output_path.empty()) {
+    const std::size_t index = queued_indices.front();
+    queued_indices.pop();
+    images::SimpleImage rgb = color_pbos.PopOldestRead();
+    images::SimpleImage inv_range = inv_range_pbos.PopOldestRead();
+    write_queue.Push(
+        [index, rgb = std::move(rgb), inv_range = std::move(inv_range), &output_dir_rgb, &output_dir_inv_range] {
+          images::WritePng(output_dir_rgb / fmt::format("{:08}.png", index), rgb, true);
+          images::WritePng(output_dir_inv_range / fmt::format("{:08}.png", index), inv_range, true);
+        });
+  }
+
   write_queue.Flush();  // Wait for writing to complete.
-  fmt::print("Processed {} images.\n", next_index + 1);
+  fmt::print("Processed {} images.\n", next_index);
   timer.Summarize();
 }
 
