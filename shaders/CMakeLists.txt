@@ -1,6 +1,6 @@
 
 # List of shader files:
-set(SHADER_FILES vertex.glsl fragment_display.glsl fragment_cubemap.glsl)
+set(SHADER_FILES vertex.glsl fragment_display.glsl fragment_cubemap.glsl fragment_oversampled_cubemap_color.glsl)
 
 # Iterate over all of them:
 foreach (shader_file ${SHADER_FILES})

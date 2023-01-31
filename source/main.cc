@@ -1,8 +1,7 @@
 // Copyright 2023 Gareth Cross
 #include <array>
-#include <chrono>
+#include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <future>
 #include <optional>
 #include <queue>
@@ -13,8 +12,6 @@
 #include <GLFW/glfw3.h>
 #include <fmt/format.h>
 #include <CLI/CLI.hpp>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 #include "assertions.hpp"
 #include "gl_utils.hpp"
@@ -24,6 +21,7 @@
 // Include all the shaders, which we generate from the files in `shaders/*.glsl`
 #include "shaders/fragment_cubemap.hpp"
 #include "shaders/fragment_display.hpp"
+#include "shaders/fragment_oversampled_cubemap_color.hpp"
 #include "shaders/vertex.hpp"
 
 static void glfw_error_callback(int error, const char* description) {
@@ -140,6 +138,9 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   const images::SimpleImage remap_table_img =
       images::LoadRawFloatImage(args.table_path, args.table_width, args.table_height, 3);
 
+  // Match window to the size of the target:
+  glfwSetWindowSize(window, remap_table_img.width, remap_table_img.height);
+
   // Copy remap table to GPU:
   const gl_utils::Texture2D remap_table{remap_table_img};
 
@@ -147,12 +148,12 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   const gl_utils::Texture2D valid_mask = LoadValidMask(args.valid_mask_path, args.table_width, args.table_height);
 
   // Create a cube-map (initially empty)
-  gl_utils::TextureCube rgb_cube{};
-  gl_utils::TextureCube inv_depth_cube{};
+  gl_utils::TextureArray rgb_cube{};
+  gl_utils::TextureArray inv_depth_cube{};
 
   // Create shader for building native image:
   const gl_utils::ShaderProgram cubemap_shader_program =
-      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_cubemap);
+      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_oversampled_cubemap_color);
 
   // Create shader for displaying the native image in the UI:
   const gl_utils::ShaderProgram display_program =
@@ -167,6 +168,9 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   constexpr glm::fquat unreal_cam_R_directx_cam = glm::fquat{0.5f, 0.5f, 0.5f, 0.5f};
   cubemap_shader_program.SetMatrixUniform("cubemap_R_camera", glm::mat3_cast(unreal_cam_R_directx_cam));
 
+  // The size of the oversampled cubemaps, in radians:
+  cubemap_shader_program.SetUniformFloat("oversampled_fov", static_cast<float>(95.0 * M_PI / 180.0));
+
   // A VBO w/ a quad we can draw to fill the screen:
   const gl_utils::FullScreenQuad quad{};
 
@@ -180,7 +184,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   glFrontFace(GL_CCW);
 
   // Enable seamless cubemaps
-  glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+  //  glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
   // Wrap some logic we call repeatedly in the loop below:
   const auto draw_to_fbo = [&](bool is_depth) {
@@ -193,7 +197,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     glBindTexture(GL_TEXTURE_2D, remap_table.Handle());
 
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, is_depth ? inv_depth_cube.Handle() : rgb_cube.Handle());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, is_depth ? inv_depth_cube.Handle() : rgb_cube.Handle());
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, valid_mask.Handle());
@@ -202,7 +206,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     cubemap_shader_program.SetUniformInt("remap_table", 0);
     cubemap_shader_program.SetUniformInt("input_cube", 1);
     cubemap_shader_program.SetUniformInt("valid_mask", 2);
-    cubemap_shader_program.SetUniformInt("is_depth", is_depth);
+    //    cubemap_shader_program.SetUniformInt("is_depth", is_depth);
 
     quad.Draw(cubemap_shader_program);
   };

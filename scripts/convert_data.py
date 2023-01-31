@@ -118,7 +118,7 @@ def main(args: argparse.Namespace):
             "--num-images",
             str(len(gt_poses)),
             "--remap-table",
-            str(remap_table_path)
+            str(remap_table_path),
         ]
         print(f"Running: {' '.join(command)}")
         subprocess.check_call(command)
