@@ -14,7 +14,14 @@
 #define STBI_ONLY_PNG
 #define STBI_NO_FAILURE_STRINGS
 #define STBI_WINDOWS_UTF8
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4505)  //  unreferenced function with internal linkage
+#endif
 #include <stb_image.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 #include "assertions.hpp"
 

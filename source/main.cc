@@ -19,9 +19,8 @@
 #include "timing.hpp"
 
 // Include all the shaders, which we generate from the files in `shaders/*.glsl`
-#include "shaders/fragment_cubemap.hpp"
 #include "shaders/fragment_display.hpp"
-#include "shaders/fragment_oversampled_cubemap_color.hpp"
+#include "shaders/fragment_oversampled_cubemap.hpp"
 #include "shaders/vertex.hpp"
 
 static void glfw_error_callback(int error, const char* description) {
@@ -153,7 +152,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
   // Create shader for building native image:
   const gl_utils::ShaderProgram cubemap_shader_program =
-      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_oversampled_cubemap_color);
+      gl_utils::CompileShaderProgram(shaders::vertex, shaders::fragment_oversampled_cubemap);
 
   // Create shader for displaying the native image in the UI:
   const gl_utils::ShaderProgram display_program =
@@ -169,7 +168,9 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   cubemap_shader_program.SetMatrixUniform("cubemap_R_camera", glm::mat3_cast(unreal_cam_R_directx_cam));
 
   // The size of the oversampled cubemaps, in radians:
+  // TODO: Would be nice if these were read it from the dataset, instead of being hardcoded.
   cubemap_shader_program.SetUniformFloat("oversampled_fov", static_cast<float>(95.0 * M_PI / 180.0));
+  cubemap_shader_program.SetUniformFloat("ue_clip_plane_meters", 0.1f);
 
   // A VBO w/ a quad we can draw to fill the screen:
   const gl_utils::FullScreenQuad quad{};
@@ -182,9 +183,6 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   glFrontFace(GL_CCW);
-
-  // Enable seamless cubemaps
-  //  glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
   // Wrap some logic we call repeatedly in the loop below:
   const auto draw_to_fbo = [&](bool is_depth) {
@@ -206,7 +204,8 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     cubemap_shader_program.SetUniformInt("remap_table", 0);
     cubemap_shader_program.SetUniformInt("input_cube", 1);
     cubemap_shader_program.SetUniformInt("valid_mask", 2);
-    //    cubemap_shader_program.SetUniformInt("is_depth", is_depth);
+    cubemap_shader_program.SetUniformInt("is_depth", is_depth);
+    cubemap_shader_program.SetUniformInt("cubemap_dim", is_depth ? inv_depth_cube.Dimension() : rgb_cube.Dimension());
 
     quad.Draw(cubemap_shader_program);
   };
@@ -253,8 +252,8 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
     // Render to the FBO:
     timer.Record(timing::SimpleTimer::Stages::Render, [&] {
-      rgb_fbo.RenderInto([&]() { draw_to_fbo(false); });
-      inv_range_fbo.RenderInto([&]() { draw_to_fbo(true); });
+      rgb_fbo.RenderInto([&] { draw_to_fbo(false); });
+      inv_range_fbo.RenderInto([&] { draw_to_fbo(true); });
     });
 
     // Read it back:

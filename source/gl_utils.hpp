@@ -122,6 +122,9 @@ struct TextureArray : public OpenGLHandle {
 
   void Fill(int face, const images::SimpleImage& image);
 
+  // Get dimension in pixels.
+  [[nodiscard]] int Dimension() const { return dimension_; }
+
  private:
   int dimension_{0};
 };
