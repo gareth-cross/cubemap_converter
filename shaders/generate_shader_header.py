@@ -15,25 +15,25 @@ def main(args: argparse.Namespace):
         contents = handle.read()
 
     output = str()
-    output += '// Machine generated file - do not modify.\n'
-    output += f'// Generated from: {filename}\n'
-    output += '#pragma once\n#include <string_view>\n\n'
-    output += 'namespace shaders {\n'
+    output += "// Machine generated file - do not modify.\n"
+    output += f"// Generated from: {filename}\n"
+    output += "#pragma once\n#include <string_view>\n\n"
+    output += "namespace shaders {\n"
     output += f'constexpr std::string_view {shader_name} = R"(\n'
     output += contents
     output += '\n)";\n'
-    output += '}  // namespace shaders\n'
+    output += "}  // namespace shaders\n"
 
-    with open(args.output, 'w') as handle:
+    with open(args.output, "w") as handle:
         handle.write(output)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--input', type=str, required=True, help="Input shader file")
-    parser.add_argument('--output', type=str, required=True, help="Output directory")
+    parser.add_argument("--input", type=str, required=True, help="Input shader file")
+    parser.add_argument("--output", type=str, required=True, help="Output directory")
     return parser.parse_args()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main(parse_args())

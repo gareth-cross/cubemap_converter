@@ -25,7 +25,7 @@ def fisheye_distortion(
         axis=-1,
     )
 
-    # brodcast multiply over columns:
+    # broadcast multiply over columns:
     poly_terms_odd = poly_terms_even * theta
 
     # Compute image plane radius:
@@ -37,13 +37,14 @@ def fisheye_distortion(
         coeffs_extended * np.array([1.0, 3.0, 5.0, 7.0, 9.0])
     ).reshape([5, 1])
 
-    return (r, r_D_theta)
+    return r, r_D_theta
 
 
 def fisheye_invert_distortion(
     r: np.ndarray, coeffs: np.ndarray, max_iters: int = 10
 ) -> T.Tuple[np.ndarray, np.ndarray]:
     """Invert fisheye_distortion_poly with gauss newton solver."""
+    assert max_iters > 0, f"max_iters = {max_iters}"
     assert len(r.shape) == 2 and r.shape[-1] == 1, f"r should be n x 1, got: {r.shape}"
     assert coeffs.shape == (4,), f"coeffs should be 4-elements, got: {coeffs.shape}"
 
@@ -84,7 +85,7 @@ def get_fisheye_coefficients() -> T.Tuple[np.ndarray, T.List[float]]:
 def test_fisheye_distortion_curve():
     """Test radial distortion curve."""
     coefficients, max_radius = get_fisheye_coefficients()
-    for (coeffs, max_r) in zip(coefficients, max_radius):
+    for coeffs, max_r in zip(coefficients, max_radius):
         r = np.linspace(0.0, max_r, 100).reshape([-1, 1])
         # radii -> theta
         theta, error = fisheye_invert_distortion(r=r, coeffs=coeffs)
@@ -101,7 +102,9 @@ def test_fisheye_distortion_curve():
             fisheye_distortion(theta=theta + dx, coeffs=coeffs)[0]
             - fisheye_distortion(theta=theta - dx, coeffs=coeffs)[0]
         ) / (dx * 2)
-        np.testing.assert_allclose(r_D_theta_numerical, r_D_theta, rtol=0.0, atol=1.0e-6)
+        np.testing.assert_allclose(
+            r_D_theta_numerical, r_D_theta, rtol=0.0, atol=1.0e-6
+        )
 
 
 def project_fisheye(p_cam: np.ndarray, K: np.ndarray, coeffs: np.ndarray):
@@ -175,7 +178,7 @@ def test_fisheye_model():
     pixel_coords = create_grid(*image_dims)
 
     # Test all the models:
-    for (coeffs, max_r) in zip(coefficients, max_radius):
+    for coeffs, max_r in zip(coefficients, max_radius):
         # Pick a suitable focal length that satisfies our maximum radius.
         f = np.linalg.norm(image_dims) * 0.5 / max_r * 1.05
         K = np.array(
