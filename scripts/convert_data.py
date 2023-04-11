@@ -1,7 +1,9 @@
 """Convert data to target camera model."""
 import argparse
+import cv2
 import numpy as np
 import pprint
+import shutil
 import subprocess
 import tempfile
 import tomli
@@ -18,7 +20,7 @@ SCRIPT_PATH = Path(__file__).parent.resolve()
 def get_image_dimensions(camera: T.Dict[str, T.Any]) -> T.Tuple[int, int]:
     match camera.get("dimensions", dict()):
         case {"width": width, "height": height}:
-            return (width, height)
+            return width, height
         case _:
             raise ValueError(
                 f"Incorrect specification of dimensions: {pprint.pformat(camera)}"
@@ -45,7 +47,7 @@ def create_fisheye_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
             coeffs = np.array([k1, k2, k3, k4])
         case _:
             raise ValueError(
-                f"Incorrect specification of distortion parameeters: {pprint.pformat(camera)}"
+                f"Incorrect specification of distortion parameters: {pprint.pformat(camera)}"
             )
 
     # construct table
@@ -54,12 +56,36 @@ def create_fisheye_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
 
 
 def create_brown_conrady_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
-    raise NotImplementedError("TODO: Implement me.")
+    """Create remap table for the OpenCV/brown-conrady model."""
+    width, height = get_image_dimensions(camera)
+    K = get_camera_matrix(camera)
+
+    match camera.get("distortion_coefficients", dict()):
+        case {"k1": k1, "k2": k2, "k3": k3, "p1": p1, "p2": p2}:
+            coeffs = np.array([k1, k2, p1, p2, k3], dtype=np.float64)
+        case _:
+            raise ValueError(
+                f"Incorrect specification of distortion parameters: {pprint.pformat(camera)}"
+            )
+
+    p_native = create_grid(width=width, height=height)
+    p_undistorted = cv2.undistortPoints(
+        p_native.astype(np.float64), K.astype(np.float64), coeffs
+    )
+    p_undistorted = np.squeeze(p_undistorted, axis=1)
+    p_undistorted_unit_depth = np.concatenate(
+        [p_undistorted, np.ones_like(p_undistorted[:, 1:])], axis=1
+    )
+    v_cam = p_undistorted_unit_depth / np.linalg.norm(
+        p_undistorted_unit_depth, axis=1, keepdims=True
+    )
+
+    return v_cam.reshape([height, width, 3])
 
 
 def create_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
     """Create remap table for the provided camera."""
-    if not "model" in camera:
+    if "model" not in camera:
         raise KeyError(f"Camera lacks a model specifier: {pprint.pformat(camera)}")
 
     model = camera["model"]
@@ -80,7 +106,7 @@ def main(args: argparse.Namespace):
 
     # determine how many images there should be:
     gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose.csv", delimiter=",")
-    print(f"Dataset contains {len(gt_poses)} timesteps to process...")
+    print(f"Dataset contains {len(gt_poses)} time-steps to process...")
 
     # load the config file
     with open(args.config, "rb") as handle:
@@ -122,6 +148,20 @@ def main(args: argparse.Namespace):
         ]
         print(f"Running: {' '.join(command)}")
         subprocess.check_call(command)
+
+    # Copy CSV files and calibration file:
+    for csv_path in input_path.glob("*.csv"):
+        csv_name = csv_path.name
+        if csv_name == "intrinsics.csv":
+            continue
+        dest_path = output_path / csv_name
+        print(f"Copying: {str(csv_path)} -> {str(dest_path)}")
+        shutil.copy(csv_path, dest_path)
+
+    # Copy the calibration
+    dest_path = output_path / "intrinsics.toml"
+    print(f"Copying: {args.config} -> {str(dest_path)}")
+    shutil.copy(args.config, dest_path)
 
 
 def parse_args():
