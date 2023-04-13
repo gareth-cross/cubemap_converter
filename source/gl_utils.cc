@@ -13,7 +13,15 @@ template <typename Func>
 void WithUniform(const GLuint handle, const std::string_view name, Func&& func) {
   glUseProgram(handle);
   const GLint uniform = glGetUniformLocation(handle, name.data());
+#if 0
   ASSERT(uniform != -1, "Failed to find uniform: {}", name);
+#else
+  if (uniform == -1) {
+    fmt::print("Warning: failed to find uniform: {}\n", name);
+    glUseProgram(0);
+    return;
+  }
+#endif
   std::invoke(std::forward<Func>(func), uniform);
   glUseProgram(0);
 }
@@ -30,6 +38,10 @@ void ShaderProgram::SetUniformVec2(const std::string_view name, const glm::vec2 
   WithUniform(Handle(), name, [&](GLint uniform) { glUniform2f(uniform, value.x, value.y); });
 }
 
+void ShaderProgram::SetUniformFloat(const std::string_view name, const float value) const {
+  WithUniform(Handle(), name, [&](GLint uniform) { glUniform1f(uniform, value); });
+}
+
 void ShaderProgram::SetUniformInt(const std::string_view name, const GLint value) const {
   WithUniform(Handle(), name, [&](GLint uniform) { glUniform1i(uniform, value); });
 }
@@ -41,7 +53,7 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
 
   // Create array of strings, which is what glShaderSource expects (we only have one string).
   const std::array<const GLchar*, 1> vertex_source_ = {vertex_source.data()};
-  glShaderSource(vertex_shader.Handle(), vertex_source_.size(), vertex_source_.data(), nullptr);
+  glShaderSource(vertex_shader.Handle(), static_cast<GLsizei>(vertex_source_.size()), vertex_source_.data(), nullptr);
   glCompileShader(vertex_shader.Handle());
 
   // check if vertex shader compiled:
@@ -59,7 +71,8 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
   ASSERT(fragment_shader, "Failed to allocate vertex shader");
 
   const std::array<const GLchar*, 1> fragment_source_ = {fragment_source.data()};
-  glShaderSource(fragment_shader.Handle(), fragment_source_.size(), fragment_source_.data(), nullptr);
+  glShaderSource(fragment_shader.Handle(), static_cast<GLsizei>(fragment_source_.size()), fragment_source_.data(),
+                 nullptr);
   glCompileShader(fragment_shader.Handle());
 
   // check for shader compile errors
@@ -203,6 +216,34 @@ void TextureCube::Fill(const int face, const images::SimpleImage& image) {
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 #endif
+}
+
+TextureArray::TextureArray() : OpenGLHandle(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }) {}
+
+void TextureArray::Fill(const int face, const images::SimpleImage& image) {
+  ASSERT(image.width == image.height, "Faces should be square. Width = {}, height = {}", image.width, image.height);
+
+  glBindTexture(GL_TEXTURE_2D_ARRAY, Handle());
+  if (dimension_ == 0) {
+    dimension_ = image.width;
+    constexpr GLsizei z_size = 6;
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GetTextureRepresentation(image.components, image.depth), dimension_,
+                   dimension_, z_size);
+  } else {
+    ASSERT(dimension_ == image.width, "All faces must have same dimension");
+  }
+
+  // Copy face to GPU:
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, face, dimension_, dimension_, 1,
+                  GetTextureInputFormat(image.components), GetTextureDataType(image.depth), &image.data[0]);
+
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 }
 
 inline GLuint CreateVertexArray() {

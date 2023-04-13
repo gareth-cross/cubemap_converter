@@ -30,8 +30,24 @@ target_include_directories(
           "${CMAKE_SOURCE_DIR}/dependencies/glad/include"
           "${CMAKE_SOURCE_DIR}/dependencies/scope_guard")
 
+# Turn on warnings:
+if(MSVC)
+  target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX /D_USE_MATH_DEFINES
+                                                 /wd4244)
+else()
+  target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -pedantic
+                                                 -Werror -Wno-sign-compare)
+endif()
+
 # Add dependencies
-add_dependencies(${PROJECT_NAME} glfw fmt-header-only CLI11 glm PNG::PNG shaders)
+add_dependencies(
+  ${PROJECT_NAME}
+  glfw
+  fmt-header-only
+  CLI11
+  glm
+  PNG::PNG
+  shaders)
 target_link_libraries(
   ${PROJECT_NAME}
   glfw
@@ -40,4 +56,4 @@ target_link_libraries(
   CLI11
   glm
   PNG::PNG
-        shaders)
+  shaders)
