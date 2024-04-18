@@ -79,7 +79,6 @@ def create_brown_conrady_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
     v_cam = p_undistorted_unit_depth / np.linalg.norm(
         p_undistorted_unit_depth, axis=1, keepdims=True
     )
-
     return v_cam.reshape([height, width, 3])
 
 
@@ -99,13 +98,13 @@ def create_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
 
 def main(args: argparse.Namespace):
     if args.bin is None:
-        args.bin = SCRIPT_PATH.parent / "build" / "Release" / "cubemap_converter.exe"
+        args.bin = SCRIPT_PATH.parent / "build" / "cubemap_converter.exe"
 
     input_path = Path(args.input).absolute()
     output_path = Path(args.output).absolute()
 
     # determine how many images there should be:
-    gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose.csv", delimiter=",")
+    gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose_00.csv", delimiter=",")
     print(f"Dataset contains {len(gt_poses)} time-steps to process...")
 
     # load the config file

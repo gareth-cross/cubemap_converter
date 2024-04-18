@@ -1,0 +1,6 @@
+# An example calibration w/ a single camera.
+[[cameras]]
+model = "brown-conrady"
+dimensions = { width = 640, height = 480 }
+camera_matrix = { fx = 320.0, fy = 320.0, cx = 319.5, cy = 239.5 }
+distortion_coefficients = { k1 = 0.0, k2 = 0.0, k3 = 0.0, p1 = 0.0, p2 = 0.0 }

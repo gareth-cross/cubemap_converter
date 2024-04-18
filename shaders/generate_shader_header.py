@@ -1,5 +1,5 @@
 """
-Script that turns GLSL file into C++ header so we can include it directly.
+Script that turns GLSL file into C++ header, so we can include it directly.
 
 Sad that this is necessary, but maybe eventually we'll get something like `include_bytes!`
 """
