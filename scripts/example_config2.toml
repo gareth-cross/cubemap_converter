@@ -1,0 +1,24 @@
+# An example configuration file w/ some cameras.
+[[cameras]]
+model = "brown-conrady"
+dimensions = { width = 1280, height = 720 }
+camera_matrix = { fx = 280.0, fy = 280.0, cx = 639.5, cy = 359.5 }
+distortion_coefficients = { k1 = 0.0, k2 = 0.0, k3 = 0.0, p1 = 0.0, p2 = 0.0 }
+
+[[cameras]]
+model = "brown-conrady"
+dimensions = { width = 1280, height = 720 }
+camera_matrix = { fx = 280.0, fy = 280.0, cx = 639.5, cy = 359.5 }
+distortion_coefficients = { k1 = 0.0, k2 = 0.0, k3 = 0.0, p1 = 0.0, p2 = 0.0 }
+
+[[cameras]]
+model = "fisheye"
+dimensions = { width = 1280, height = 720 }
+camera_matrix = { fx = 260.0, fy = 260.0, cx = 639.5, cy = 359.5 }
+distortion_coefficients = { k1 = 0.0, k2 = 0.0, k3 = 0.0, k4 = 0.0 }
+
+[[cameras]]
+model = "fisheye"
+dimensions = { width = 1280, height = 720 }
+camera_matrix = { fx = 260.0, fy = 260.0, cx = 639.5, cy = 359.5 }
+distortion_coefficients = { k1 = 0.0, k2 = 0.0, k3 = 0.0, k4 = 0.0 }
