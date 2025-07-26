@@ -104,7 +104,7 @@ def main(args: argparse.Namespace):
     output_path = Path(args.output).absolute()
 
     # determine how many images there should be:
-    gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose_00.csv", delimiter=",")
+    gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose.csv", delimiter=",")
     print(f"Dataset contains {len(gt_poses)} time-steps to process...")
 
     # load the config file
