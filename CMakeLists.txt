@@ -1,59 +1,44 @@
-cmake_minimum_required(VERSION 3.17)
+cmake_minimum_required(VERSION 3.31)
 project(
   cubemap_converter
   VERSION 0.1
   DESCRIPTION "Convert cubemaps to native images."
   LANGUAGES C CXX)
-set(CMAKE_COLOR_MAKEFILE ON)
 
-message(STATUS "C compiler: ${CMAKE_C_COMPILER}")
-message(STATUS "C++ compiler: ${CMAKE_CXX_COMPILER}")
-
-# Add third party code
-add_subdirectory(dependencies)
-
-# Find lib png:
+find_package(OpenGL REQUIRED)
 find_package(PNG REQUIRED)
 
-# Add shaders
+add_subdirectory(dependencies)
 add_subdirectory(shaders)
 
-set(GLAD_SOURCES dependencies/glad/src/gl.c)
-set(PROJECT_SOURCES source/main.cc source/gl_utils.cc source/images.cc)
+add_executable(
+  cubemap_converter
+  source/main.cc source/gl_utils.cc source/gl_utils.hpp source/images.cc
+  source/images.hpp dependencies/glad/src/gl.c)
+target_compile_features(cubemap_converter PUBLIC cxx_std_20)
+set_property(TARGET cubemap_converter PROPERTY C_STANDARD 11)
 
-add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} ${GLAD_SOURCES})
-target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
-set_property(TARGET ${PROJECT_NAME} PROPERTY C_STANDARD 11)
 target_include_directories(
-  ${PROJECT_NAME}
-  PRIVATE "${CMAKE_SOURCE_DIR}/dependencies/stb"
-          "${CMAKE_SOURCE_DIR}/dependencies/glad/include"
-          "${CMAKE_SOURCE_DIR}/dependencies/scope_guard")
+  cubemap_converter
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/stb"
+          "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/glad/include"
+          "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/scope_guard")
 
-# Turn on warnings:
 if(MSVC)
-  target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX /D_USE_MATH_DEFINES
-                                                 /wd4244)
+  target_compile_options(cubemap_converter PRIVATE /W4 /WX /D_USE_MATH_DEFINES
+                                                   /wd4244)
 else()
-  target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -pedantic
-                                                 -Werror -Wno-sign-compare)
+  target_compile_options(cubemap_converter PRIVATE -Wall -Wextra -pedantic
+                                                   -Werror)
 endif()
 
-# Add dependencies
-add_dependencies(
-  ${PROJECT_NAME}
-  glfw
-  fmt-header-only
-  CLI11
-  glm
-  PNG::PNG
-  shaders)
 target_link_libraries(
-  ${PROJECT_NAME}
+  cubemap_converter
+  CLI11::CLI11
+  fmt::fmt-header-only
   glfw
-  fmt-header-only
-  opengl32
-  CLI11
   glm
+  opengl32
   PNG::PNG
+  gx::assertions
   shaders)

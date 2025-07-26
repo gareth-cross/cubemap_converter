@@ -1,8 +1,6 @@
-# List of shader files:
 set(SHADER_FILES vertex.glsl fragment_display.glsl fragment_cubemap.glsl
                  fragment_oversampled_cubemap.glsl)
 
-# Iterate over all of them:
 foreach(shader_file ${SHADER_FILES})
   # Split the extensions:
   set(shader_file_path "${CMAKE_CURRENT_SOURCE_DIR}/${shader_file}")
@@ -20,7 +18,6 @@ foreach(shader_file ${SHADER_FILES})
     VERBATIM)
 endforeach()
 
-# Create a target for the shader codegen:
 add_custom_target(shaders_codegen DEPENDS ${SHADER_HEADER_FILES})
 
 # Create a target that exports the headers:

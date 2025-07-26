@@ -13,7 +13,7 @@
 #include <fmt/format.h>
 #include <CLI/CLI.hpp>
 
-#include "assertions.hpp"
+#include "assertions/assertions.hpp"
 #include "gl_utils.hpp"
 #include "images.hpp"
 #include "timing.hpp"
@@ -73,10 +73,9 @@ gl_utils::Texture2D LoadValidMask(const std::string& mask_path, const int table_
     texture.Fill(white_image);
   } else {
     std::optional<images::SimpleImage> mask_image = images::LoadPng(mask_path, images::ImageDepth::Bits8);
-    ASSERT(mask_image.has_value(), "Could not load valid mask from: {}", mask_path);
-    ASSERT(mask_image->width == table_width && mask_image->height == table_height,
-           "Remap table and valid mask do not share the same dimensions. mask = [{}, {}], table = [{}, {}]",
-           mask_image->width, mask_image->height, table_width, table_height);
+    F_ASSERT(mask_image.has_value(), "Could not load valid mask from: {}", mask_path);
+    F_ASSERT_EQ(mask_image->width, table_width);
+    F_ASSERT_EQ(mask_image->height, table_height);
     texture.Fill(*mask_image);
   }
   return texture;
@@ -113,14 +112,13 @@ struct TaskQueue {
 
 void CreateOrAssert(const std::filesystem::path& path) {
   std::error_code err{};
-  // Recursively create directories:
   const bool created = std::filesystem::create_directories(path, err);
-  ASSERT(created || !err, "Failed to create directory: `{}`. Error = {}", path.u8string(), err.message());
+  F_ASSERT(created || !err, "Failed to create directory: `{}`. Error = {}", path.generic_string(), err.message());
 }
 
 void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
-  ASSERT(args.table_width > 0 && args.table_height > 0, "Dimensions must be positive: w={}, h={}", args.table_width,
-         args.table_height);
+  F_ASSERT(args.table_width > 0 && args.table_height > 0, "Dimensions must be positive: w={}, h={}", args.table_width,
+           args.table_height);
 
   // Path to the input directory:
   const std::filesystem::path dataset{args.input_path};
@@ -241,11 +239,11 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     // Copy the RGB + depth data:
     timer.Record(timing::SimpleTimer::Stages::Unpack, [&] {
       for (int face = 0; face < 6; ++face) {
-        ASSERT(!faces[face].IsEmpty(), "Failed to load RGB cubemap face: {}, index = {}", face, next_index);
+        F_ASSERT(!faces[face].IsEmpty(), "Failed to load RGB cubemap face: {}, index = {}", face, next_index);
         rgb_cube.Fill(face, faces[face]);
       }
       for (int face = 0; face < 6; ++face) {
-        ASSERT(!faces[face].IsEmpty(), "Failed to load inverse depth cubemap face: {}, index = {}", face, next_index);
+        F_ASSERT(!faces[face].IsEmpty(), "Failed to load inverse depth cubemap face: {}, index = {}", face, next_index);
         inv_depth_cube.Fill(face, faces[face + 6]);
       }
     });
@@ -263,7 +261,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     timer.Record(timing::SimpleTimer::Stages::Pack, [&] {
       if (color_pbos.QueueIsFull()) {
         // We've filled the queue, we need to de-queue the oldest reads:
-        ASSERT(inv_range_pbos.QueueIsFull());
+        F_ASSERT(inv_range_pbos.QueueIsFull());
         previous_rgb_read = color_pbos.PopOldestRead();
         previous_inv_range_read = inv_range_pbos.PopOldestRead();
         read_index = queued_indices.front();
@@ -277,7 +275,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
     // Write the data out (if the user specified a path).
     if (!previous_rgb_read.IsEmpty() && !args.output_path.empty()) {
-      ASSERT(read_index < next_index);  //  This should be an earlier frame.
+      F_ASSERT_LT(read_index, next_index);  //  This should be an earlier frame.
       timer.Record(timing::SimpleTimer::Stages::Write, [&] {
         write_queue.Push([read_index, rgb = std::move(previous_rgb_read),
                           inv_range = std::move(previous_inv_range_read), &output_dir_rgb, &output_dir_inv_range] {
@@ -287,14 +285,12 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
       });
     }
 
-    // Set up the main viewport so the user sees the result:
     int display_w, display_h;
     glfwGetFramebufferSize(window, &display_w, &display_h);
     glViewport(0, 0, display_w, display_h);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // These variables ensure we render with the correct aspect ratio:
     display_program.SetUniformVec2("viewport_dims", glm::vec2(display_w, display_h));
     display_program.SetUniformVec2("image_dims", glm::vec2(texture_width, texture_height));
     display_program.SetUniformInt("image", 0);
@@ -306,7 +302,6 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     glBindTexture(GL_TEXTURE_2D, 0);
     glfwSwapBuffers(window);
 
-    // Increment the index:
     if (next_index + 1 == args.num_images) {
       break;  //  We can stop.
     } else {
@@ -355,7 +350,6 @@ int Run(const ProgramArgs& args) {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-  // Create window with graphics context
   GLFWwindow* const window = glfwCreateWindow(1280, 720, "Cubemap converter", nullptr, nullptr);
   if (window == nullptr) {
     fmt::print("Failed to create GLFW window\n");
@@ -387,7 +381,6 @@ int Run(const ProgramArgs& args) {
 }
 
 int main(int argc, char** argv) {
-  // Parse args or bail.
   const std::variant<ProgramArgs, int> args_or_error = ParseProgramArgs(argc, argv);
   if (args_or_error.index() == 1) {
     return std::get<int>(args_or_error);

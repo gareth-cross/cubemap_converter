@@ -1,6 +1,8 @@
 // Copyright 2023 Gareth Cross
 #pragma once
+#include <array>
 #include <chrono>
+#include <numeric>
 
 namespace timing {
 

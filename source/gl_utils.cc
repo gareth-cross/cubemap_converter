@@ -9,19 +9,19 @@
 
 namespace gl_utils {
 
+OpenGLHandle::OpenGLHandle(GLuint handle, void (*deleter)(GLuint) noexcept) : handle_(handle), deleter_(deleter) {
+  F_ASSERT(deleter_, "Cannot construct with null deleter");
+}
+
 template <typename Func>
 void WithUniform(const GLuint handle, const std::string_view name, Func&& func) {
   glUseProgram(handle);
   const GLint uniform = glGetUniformLocation(handle, name.data());
-#if 0
-  ASSERT(uniform != -1, "Failed to find uniform: {}", name);
-#else
   if (uniform == -1) {
     fmt::print("Warning: failed to find uniform: {}\n", name);
     glUseProgram(0);
     return;
   }
-#endif
   std::invoke(std::forward<Func>(func), uniform);
   glUseProgram(0);
 }
@@ -49,7 +49,7 @@ void ShaderProgram::SetUniformInt(const std::string_view name, const GLint value
 // TODO: Fail more gracefully maybe?
 ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const std::string_view fragment_source) {
   const Shader vertex_shader{GL_VERTEX_SHADER};
-  ASSERT(vertex_shader, "Failed to allocate vertex shader");
+  F_ASSERT(vertex_shader, "Failed to allocate vertex shader");
 
   // Create array of strings, which is what glShaderSource expects (we only have one string).
   const std::array<const GLchar*, 1> vertex_source_ = {vertex_source.data()};
@@ -63,12 +63,12 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
   glGetShaderiv(vertex_shader.Handle(), GL_COMPILE_STATUS, &success);
   if (!success) {
     glGetShaderInfoLog(vertex_shader.Handle(), static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to compile vertex shader. Reason: {}", compiler_log);
+    F_ASSERT(success, "Failed to compile vertex shader. Reason: {}", compiler_log);
   }
 
   // fragment shader
   const Shader fragment_shader{GL_FRAGMENT_SHADER};
-  ASSERT(fragment_shader, "Failed to allocate vertex shader");
+  F_ASSERT(fragment_shader, "Failed to allocate vertex shader");
 
   const std::array<const GLchar*, 1> fragment_source_ = {fragment_source.data()};
   glShaderSource(fragment_shader.Handle(), static_cast<GLsizei>(fragment_source_.size()), fragment_source_.data(),
@@ -80,12 +80,12 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
   if (!success) {
     glGetShaderInfoLog(fragment_shader.Handle(), static_cast<GLsizei>(compiler_log.size()), nullptr,
                        compiler_log.data());
-    ASSERT(success, "Failed to compile fragment shader. Reason: {}", compiler_log);
+    F_ASSERT(success, "Failed to compile fragment shader. Reason: {}", compiler_log);
   }
 
   // link shaders
   ShaderProgram program{};
-  ASSERT(program, "Failed to allocate program");
+  F_ASSERT(program, "Failed to allocate program");
   glAttachShader(program.Handle(), vertex_shader.Handle());
   glAttachShader(program.Handle(), fragment_shader.Handle());
   glLinkProgram(program.Handle());
@@ -94,7 +94,7 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
   glGetProgramiv(program.Handle(), GL_LINK_STATUS, &success);
   if (!success) {
     glGetProgramInfoLog(program.Handle(), static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
-    ASSERT(success, "Failed to link shader. Reason: {}", compiler_log);
+    F_ASSERT(success, "Failed to link shader. Reason: {}", compiler_log);
   }
   glUseProgram(0);
   return program;
@@ -103,7 +103,7 @@ ShaderProgram CompileShaderProgram(const std::string_view vertex_source, const s
 static GLuint CreateTexture() {
   GLuint texture{0};
   glGenTextures(1, &texture);
-  ASSERT(texture != 0, "Failed create texture handle");
+  F_ASSERT_NE(texture, 0, "Failed create texture handle");
   return texture;
 }
 
@@ -130,7 +130,7 @@ static GLenum GetTextureRepresentation(const int channels, const images::ImageDe
   const auto it = std::find_if(table.begin(), table.end(), [&](const TextureFormatEntry& entry) {
     return entry.channels == channels && entry.depth == depth;
   });
-  ASSERT(it != table.end(), "Invalid channels ({}) and depth ({})", channels, static_cast<int>(depth));
+  F_ASSERT(it != table.end(), "Invalid channels ({}) and depth ({})", channels, static_cast<int>(depth));
   return it->value;
 }
 
@@ -143,7 +143,7 @@ static GLenum GetTextureInputFormat(const int channels) {
     default:
       break;
   }
-  ASSERT(channels == 4, "Channels must be [1, 3, 4]. channels = {}", channels);
+  F_ASSERT_EQ(channels, 4, "Channels must be [1, 3, 4]. channels = {}", channels);
   return GL_RGBA;
 }
 
@@ -156,12 +156,12 @@ static constexpr GLenum GetTextureDataType(const images::ImageDepth depth) {
     default:
       break;
   }
-  ASSERT(depth == images::ImageDepth::Bits32);
+  F_ASSERT(depth == images::ImageDepth::Bits32);
   return GL_FLOAT;
 }
 
 void Texture2D::Fill(const struct images::SimpleImage& image) {
-  ASSERT(Handle());
+  F_ASSERT(Handle());
   const GLenum internal_format = GetTextureRepresentation(image.components, image.depth);
 
   glBindTexture(GL_TEXTURE_2D, Handle());
@@ -187,12 +187,12 @@ static GLenum TargetForFace(int face) {
       GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X, GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
       GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
   };
-  ASSERT(face >= 0 && face < 6, "Invalid face: {}", face);
+  F_ASSERT(face >= 0 && face < 6, "Invalid face: {}", face);
   return faces[face];
 }
 
 void TextureCube::Fill(const int face, const images::SimpleImage& image) {
-  ASSERT(image.width == image.height, "Faces should be square. Width = {}, height = {}", image.width, image.height);
+  F_ASSERT_EQ(image.width, image.height, "Faces should be square. Width = {}, height = {}", image.width, image.height);
 
   glBindTexture(GL_TEXTURE_CUBE_MAP, Handle());
   if (dimension_ == 0) {
@@ -201,7 +201,7 @@ void TextureCube::Fill(const int face, const images::SimpleImage& image) {
     glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GetTextureRepresentation(image.components, image.depth), dimension_,
                    dimension_);
   } else {
-    ASSERT(dimension_ == image.width, "All faces must have same dimension");
+    F_ASSERT_EQ(dimension_, image.width, "All faces must have same dimension");
   }
 
   // Copy face to GPU:
@@ -221,7 +221,7 @@ void TextureCube::Fill(const int face, const images::SimpleImage& image) {
 TextureArray::TextureArray() : OpenGLHandle(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }) {}
 
 void TextureArray::Fill(const int face, const images::SimpleImage& image) {
-  ASSERT(image.width == image.height, "Faces should be square. Width = {}, height = {}", image.width, image.height);
+  F_ASSERT_EQ(image.width, image.height, "Faces should be square. Width = {}, height = {}", image.width, image.height);
 
   glBindTexture(GL_TEXTURE_2D_ARRAY, Handle());
   if (dimension_ == 0) {
@@ -230,7 +230,7 @@ void TextureArray::Fill(const int face, const images::SimpleImage& image) {
     glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GetTextureRepresentation(image.components, image.depth), dimension_,
                    dimension_, z_size);
   } else {
-    ASSERT(dimension_ == image.width, "All faces must have same dimension");
+    F_ASSERT_EQ(dimension_, image.width, "All faces must have same dimension");
   }
 
   // Copy face to GPU:
@@ -302,7 +302,7 @@ FullScreenQuad::FullScreenQuad()
 }
 
 void FullScreenQuad::Draw(const ShaderProgram& program) const {
-  ASSERT(program, "Program is not initialized");
+  F_ASSERT(program, "Program is not initialized");
   glUseProgram(program.Handle());
   glBindVertexArray(vertex_array_.Handle());
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
@@ -313,7 +313,7 @@ void FullScreenQuad::Draw(const ShaderProgram& program) const {
 inline GLuint CreateFramebuffer() {
   GLuint fbo{0};
   glGenFramebuffers(1, &fbo);
-  ASSERT(fbo, "Failed to create FBO");
+  F_ASSERT(fbo, "Failed to create FBO");
   return fbo;
 }
 
@@ -322,7 +322,8 @@ FramebufferObject::FramebufferObject(const int width, const int height, const Fr
       texture_(CreateTexture(), [](GLuint x) noexcept { glDeleteTextures(1, &x); }),
       width_(width),
       height_(height) {
-  ASSERT(width_ > 0 && height_ > 0);
+  F_ASSERT_GT(width_, 0);
+  F_ASSERT_GT(height_, 0);
 
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_.Handle());
   glBindTexture(GL_TEXTURE_2D, texture_.Handle());
@@ -338,7 +339,7 @@ FramebufferObject::FramebufferObject(const int width, const int height, const Fr
   // Attach texture to the FBO.
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_.Handle(), 0);
   const GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-  ASSERT(fbo_status == GL_FRAMEBUFFER_COMPLETE, "FBO is not complete, status = {}", fbo_status);
+  F_ASSERT_EQ(fbo_status, GL_FRAMEBUFFER_COMPLETE, "FBO is not complete, status = {}", fbo_status);
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -368,14 +369,14 @@ void FramebufferObject::ReadIntoPixelbuffer(const int channels, const images::Im
 inline GLuint CreatePixelBuffer() {
   GLuint result{0};
   glGenBuffers(1, &result);
-  ASSERT(result != 0, "Failed to create pixel buffer");
+  F_ASSERT_NE(result, 0, "Failed to create pixel buffer");
   return result;
 }
 
 PixelbufferQueue::PixelbufferQueue(std::size_t num_buffers, const int width, const int height, const int channels,
                                    const images::ImageDepth depth)
-    : channels_(channels), depth_(depth), width_(width), height_(height) {
-  ASSERT(num_buffers > 0);
+    : width_(width), height_(height), channels_(channels), depth_(depth) {
+  F_ASSERT_GT(num_buffers, 0);
   pbo_pool_.reserve(num_buffers);
   for (std::size_t i = 0; i < num_buffers; ++i) {
     pbo_pool_.emplace_back(CreatePixelBuffer(), [](GLuint x) noexcept { glDeleteBuffers(1, &x); });
@@ -389,7 +390,7 @@ PixelbufferQueue::PixelbufferQueue(std::size_t num_buffers, const int width, con
 }
 
 void PixelbufferQueue::QueueReadFromFbo(const FramebufferObject& fbo) {
-  ASSERT(!QueueIsFull(), "Queue is full");
+  F_ASSERT(!QueueIsFull(), "Queue is full");
   // Take the next PBO and queue a read:
   OpenGLHandle pbo = std::move(pbo_pool_.back());
   pbo_pool_.pop_back();
@@ -398,7 +399,7 @@ void PixelbufferQueue::QueueReadFromFbo(const FramebufferObject& fbo) {
 }
 
 images::SimpleImage PixelbufferQueue::PopOldestRead() {
-  ASSERT(HasPendingReads(), "No pending reads left (queue is empty)");
+  F_ASSERT(HasPendingReads(), "No pending reads left (queue is empty)");
 
   OpenGLHandle pbo = std::move(pending_reads_.front());
   pending_reads_.pop();
@@ -406,7 +407,7 @@ images::SimpleImage PixelbufferQueue::PopOldestRead() {
   // Bind it fetch the data:
   glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo.Handle());
   const void* mapped = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-  ASSERT(mapped, "Failed to map PBO");
+  F_ASSERT(mapped, "Failed to map PBO");
 
   // Allocate and return the result:
   images::SimpleImage output_image{width_, height_, channels_, depth_};

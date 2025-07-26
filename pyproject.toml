@@ -43,3 +43,6 @@ platforms = ["win-64"]
 cmake = "==3.31"
 ninja = ">=1.13.1,<2"
 pre-commit = ">=4.2.0,<5"
+libpng = ">=1.6.50,<2"
+zlib = ">=1.3.1,<2"
+cmake-format = ">=0.6.13,<0.7"
