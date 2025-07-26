@@ -1,43 +1,39 @@
 """Convert data to target camera model."""
+
 import argparse
-import cv2
-import numpy as np
 import pprint
 import shutil
 import subprocess
 import tempfile
-import tomli
 import typing as T
-
 from pathlib import Path
 
+import cv2
+import numpy as np
+import tomli
 from fisheye_model import unproject_fisheye
 from utils import create_grid
 
 SCRIPT_PATH = Path(__file__).parent.resolve()
 
 
-def get_image_dimensions(camera: T.Dict[str, T.Any]) -> T.Tuple[int, int]:
+def get_image_dimensions(camera: dict[str, T.Any]) -> tuple[int, int]:
     match camera.get("dimensions", dict()):
         case {"width": width, "height": height}:
             return width, height
         case _:
-            raise ValueError(
-                f"Incorrect specification of dimensions: {pprint.pformat(camera)}"
-            )
+            raise ValueError(f"Incorrect specification of dimensions: {pprint.pformat(camera)}")
 
 
-def get_camera_matrix(camera: T.Dict[str, T.Any]) -> np.ndarray:
+def get_camera_matrix(camera: dict[str, T.Any]) -> np.ndarray:
     match camera.get("camera_matrix", dict()):
         case {"fx": fx, "fy": fy, "cx": cx, "cy": cy}:
             return np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
         case _:
-            raise ValueError(
-                f"Incorrect specification of camera matrix: {pprint.pformat(camera)}"
-            )
+            raise ValueError(f"Incorrect specification of camera matrix: {pprint.pformat(camera)}")
 
 
-def create_fisheye_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
+def create_fisheye_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
     """Create remap table for the kannala-brant fisheye model."""
     width, height = get_image_dimensions(camera)
     K = get_camera_matrix(camera)
@@ -55,7 +51,7 @@ def create_fisheye_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
     return unproject_fisheye(p_native, K=K, coeffs=coeffs).reshape([height, width, 3])
 
 
-def create_brown_conrady_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
+def create_brown_conrady_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
     """Create remap table for the OpenCV/brown-conrady model."""
     width, height = get_image_dimensions(camera)
     K = get_camera_matrix(camera)
@@ -69,9 +65,7 @@ def create_brown_conrady_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
             )
 
     p_native = create_grid(width=width, height=height)
-    p_undistorted = cv2.undistortPoints(
-        p_native.astype(np.float64), K.astype(np.float64), coeffs
-    )
+    p_undistorted = cv2.undistortPoints(p_native.astype(np.float64), K.astype(np.float64), coeffs)
     p_undistorted = np.squeeze(p_undistorted, axis=1)
     p_undistorted_unit_depth = np.concatenate(
         [p_undistorted, np.ones_like(p_undistorted[:, 1:])], axis=1
@@ -82,7 +76,7 @@ def create_brown_conrady_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
     return v_cam.reshape([height, width, 3])
 
 
-def create_remap_table(camera: T.Dict[str, T.Any]) -> np.ndarray:
+def create_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
     """Create remap table for the provided camera."""
     if "model" not in camera:
         raise KeyError(f"Camera lacks a model specifier: {pprint.pformat(camera)}")
@@ -113,9 +107,7 @@ def main(args: argparse.Namespace):
 
     cameras = config.get("cameras", [])
     if not len(cameras):
-        print(
-            f"Specified config [{args.config}] had no cameras in it:\n{pprint.pformat(config)}"
-        )
+        print(f"Specified config [{args.config}] had no cameras in it:\n{pprint.pformat(config)}")
         exit(1)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="cubemap_converter_"))
@@ -165,9 +157,7 @@ def main(args: argparse.Namespace):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "-b", "--bin", type=str, help="Path to cubemap converter binary."
-    )
+    parser.add_argument("-b", "--bin", type=str, help="Path to cubemap converter binary.")
     parser.add_argument(
         "-c", "--config", type=str, required=True, help="Path to configuration file."
     )

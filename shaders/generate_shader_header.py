@@ -3,6 +3,7 @@ Script that turns GLSL file into C++ header, so we can include it directly.
 
 Sad that this is necessary, but maybe eventually we'll get something like `include_bytes!`
 """
+
 import argparse
 import os
 
@@ -14,7 +15,7 @@ def main(args: argparse.Namespace):
     with open(args.input) as handle:
         contents = handle.read()
 
-    output = str()
+    output = ""
     output += "// Machine generated file - do not modify.\n"
     output += f"// Generated from: {filename}\n"
     output += "#pragma once\n#include <string_view>\n\n"

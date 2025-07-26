@@ -85,7 +85,7 @@ gl_utils::Texture2D LoadValidMask(const std::string& mask_path, const int table_
 // A poor man's thread pool.
 template <typename T>
 struct TaskQueue {
-  explicit TaskQueue(std::size_t max) : max_items(max){};
+  explicit TaskQueue(std::size_t max) : max_items(max) {};
 
   // Push new task into the queue.
   template <typename Function>

@@ -1,0 +1,45 @@
+[project]
+name = "cubemap-converter"
+version = "0.1.0"
+description = "Remap cubemaps."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python>=4.12.0.88",
+    "tomli>=2.2.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+exclude = ["dependencies"]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = false
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # Pyflakes
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "I",   # isort
+]
+ignore = []
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[tool.pixi.tasks]
+
+[tool.pixi.dependencies]
+cmake = "==3.31"
+ninja = ">=1.13.1,<2"
+pre-commit = ">=4.2.0,<5"
