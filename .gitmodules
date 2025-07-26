@@ -16,3 +16,6 @@
 [submodule "dependencies/scope_guard"]
 	path = dependencies/scope_guard
 	url = https://github.com/ricab/scope_guard.git
+[submodule "dependencies/assertions"]
+	path = dependencies/assertions
+	url = git@github.com:gareth-cross/assertions.git
