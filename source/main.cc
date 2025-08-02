@@ -308,6 +308,25 @@ void WindowSizeCallback(GLFWwindow* const window, int, int) {
   glViewport(0, 0, display_w, display_h);
 }
 
+void InstallTerminationHandler() {
+  std::set_terminate([]() {
+    try {
+      std::exception_ptr eptr{std::current_exception()};
+      if (eptr) {
+        std::rethrow_exception(eptr);
+      } else {
+        std::fprintf(stderr, "Exiting without exception.\n");
+      }
+    } catch (const std::exception& ex) {
+      std::fprintf(stderr, "Unhandled exception:\n%s\n", ex.what());
+    } catch (...) {
+      std::fprintf(stderr, "Unknown exception caught.\n");
+    }
+    std::flush(std::cerr);
+    std::exit(EXIT_FAILURE);
+  });
+}
+
 int Run(const ProgramArgs& args) {
   // Setup window
   glfwSetErrorCallback(glfw_error_callback);
@@ -352,10 +371,11 @@ int Run(const ProgramArgs& args) {
   return 0;
 }
 
-int main(int argc, char** argv) {
+int main(const int argc, char** argv) {
   const auto maybe_args = ParseProgramArgs(argc, argv);
   if (!maybe_args) {
     return EXIT_FAILURE;
   }
+  InstallTerminationHandler();
   return Run(*maybe_args);
 }
