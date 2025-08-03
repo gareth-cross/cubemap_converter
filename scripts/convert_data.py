@@ -97,6 +97,9 @@ def main(args: argparse.Namespace):
     input_path = Path(args.input).absolute()
     output_path = Path(args.output).absolute()
 
+    if args.clean and output_path.exists():
+        shutil.rmtree(output_path)
+
     # determine how many images there should be:
     gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose.csv", delimiter=",", skip_header=1)
     print(f"Dataset contains {len(gt_poses)} time-steps to process...")
@@ -172,6 +175,7 @@ def parse_args():
         required=True,
         help="Output directory.",
     )
+    parser.add_argument("--clean", action="store_true", help="Clean the destination if it exists.")
     return parser.parse_args()
 
 

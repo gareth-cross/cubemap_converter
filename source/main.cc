@@ -114,7 +114,7 @@ void CreateOrAssert(const std::filesystem::path& path) {
   F_ASSERT(created || !err, "Failed to create directory: `{}`. Error = {}", path.generic_string(), err.message());
 }
 
-void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
+bool ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
   F_ASSERT(args.table_width > 0 && args.table_height > 0, "Dimensions must be positive: w={}, h={}", args.table_width,
            args.table_height);
   const std::filesystem::path dataset{args.input_path};
@@ -219,13 +219,25 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
     // TODO: We'd get better GPU usage if this was a thread pool.
     std::vector<images::SimpleImage> faces = images::LoadCubemapImages(dataset, next_index, args.camera_index, true);
 
+    bool missing_face = false;
     for (int face = 0; face < 6; ++face) {
-      F_ASSERT(!faces[face].IsEmpty(), "Failed to load RGB cubemap face: {}, index = {}", face, next_index);
-      rgb_cube.Fill(face, faces[face]);
+      if (faces[face].IsEmpty()) {
+        fmt::print("Failed to load RGB cubemap face: {}, index = {}\n", face, next_index);
+        missing_face = true;
+      } else {
+        rgb_cube.Fill(face, faces[face]);
+      }
     }
     for (int face = 0; face < 6; ++face) {
-      F_ASSERT(!faces[face].IsEmpty(), "Failed to load inverse depth cubemap face: {}, index = {}", face, next_index);
-      inv_depth_cube.Fill(face, faces[face + 6]);
+      if (faces[face + 6].IsEmpty()) {
+        fmt::print("Failed to load inverse depth cubemap face: {}, index = {}\n", face, next_index);
+        missing_face = true;
+      } else {
+        inv_depth_cube.Fill(face, faces[face + 6]);
+      }
+    }
+    if (missing_face) {
+      break;
     }
 
     // Render to the FBO:
@@ -299,6 +311,7 @@ void ExecuteMainLoop(const ProgramArgs& args, GLFWwindow* const window) {
 
   write_queue.Flush();  // Wait for writing to complete.
   fmt::print("Processed {} images.\n", next_index);
+  return next_index + 1 == args.num_images;
 }
 
 // Callback to update viewport.
@@ -365,10 +378,10 @@ int Run(const ProgramArgs& args) {
     gl_utils::EnableDebugOutput(glad_version);
   }
 
-  ExecuteMainLoop(args, window);
+  const bool success = ExecuteMainLoop(args, window);
   glfwDestroyWindow(window);
   glfwTerminate();
-  return 0;
+  return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 int main(const int argc, char** argv) {
