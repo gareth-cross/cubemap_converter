@@ -76,6 +76,32 @@ def create_brown_conrady_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
     return v_cam.reshape([height, width, 3])
 
 
+def create_equirectangular_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
+    width, height = get_image_dimensions(camera)
+    p_native = create_grid(width=width, height=height)
+
+    x_normalized = p_native[:, 0] / (width - 1)
+    y_normalized = p_native[:, 1] / height
+
+    theta = np.pi * y_normalized
+    phi = 2 * np.pi * x_normalized
+
+    # https://www.pbr-book.org/4ed/Cameras_and_Film/Spherical_Camera
+    v_cam = np.stack(
+        [
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta),
+        ],
+        axis=-1,
+    )
+    R = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0]])
+    v_cam = R @ v_cam.reshape(-1, 3, 1)
+    v_cam = v_cam.reshape(-1, 3)
+
+    return v_cam.reshape([height, width, 3])
+
+
 def create_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
     """Create remap table for the provided camera."""
     if "model" not in camera:
@@ -86,6 +112,8 @@ def create_remap_table(camera: dict[str, T.Any]) -> np.ndarray:
         return create_fisheye_remap_table(camera)
     elif model == "brown-conrady":
         return create_brown_conrady_remap_table(camera)
+    elif model == "equirectangular":
+        return create_equirectangular_remap_table(camera)
     else:
         raise KeyError(f"Invalid camera model: {model}")
 
