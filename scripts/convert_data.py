@@ -181,6 +181,11 @@ def main(args: argparse.Namespace):
             print(f"Copying: {str(csv_path)} -> {str(dest_path)}")
             shutil.copy(csv_path, dest_path)
 
+    # Copy lidar scans
+    lidar_src_path = input_path / "lidar"
+    if lidar_src_path.exists():
+        shutil.copytree(lidar_src_path, output_path / "lidar")
+
     # Copy the calibration
     dest_path = output_path / "intrinsics.toml"
     print(f"Copying: {args.config} -> {str(dest_path)}")
