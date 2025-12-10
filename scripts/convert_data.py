@@ -172,13 +172,14 @@ def main(args: argparse.Namespace):
         subprocess.check_call(command)
 
     # Copy CSV files and calibration file:
-    for csv_path in input_path.glob("*.csv"):
-        csv_name = csv_path.name
-        if csv_name == "intrinsics.csv":
-            continue
-        dest_path = output_path / csv_name
-        print(f"Copying: {str(csv_path)} -> {str(dest_path)}")
-        shutil.copy(csv_path, dest_path)
+    for extension in ("*.csv", "*.toml"):
+        for csv_path in input_path.glob(extension):
+            csv_name = csv_path.name
+            if csv_name == "intrinsics.csv":
+                continue
+            dest_path = output_path / csv_name
+            print(f"Copying: {str(csv_path)} -> {str(dest_path)}")
+            shutil.copy(csv_path, dest_path)
 
     # Copy the calibration
     dest_path = output_path / "intrinsics.toml"
