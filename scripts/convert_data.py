@@ -128,6 +128,8 @@ def main(args: argparse.Namespace):
     if args.clean and output_path.exists():
         shutil.rmtree(output_path)
 
+    output_path.mkdir(parents=True, exist_ok=True)
+
     # determine how many images there should be:
     gt_poses = np.genfromtxt(input_path / "ground_truth_imu_pose.csv", delimiter=",", skip_header=1)
     print(f"Dataset contains {len(gt_poses)} time-steps to process...")
@@ -171,20 +173,16 @@ def main(args: argparse.Namespace):
         print(f"Running: {' '.join(command)}")
         subprocess.check_call(command)
 
-    # Copy CSV files and calibration file:
-    for extension in ("*.csv", "*.toml"):
-        for csv_path in input_path.glob(extension):
-            csv_name = csv_path.name
-            if csv_name == "intrinsics.csv":
-                continue
-            dest_path = output_path / csv_name
-            print(f"Copying: {str(csv_path)} -> {str(dest_path)}")
-            shutil.copy(csv_path, dest_path)
+    # Copy CSV and TOML files:
+    for src_path in [*input_path.glob("*.csv"), *input_path.glob("*.toml")]:
+        if src_path.name == "intrinsics.csv":
+            continue
+        dest_path = output_path / src_path.name
+        print(f"Copying: {str(src_path)} -> {str(dest_path)}")
+        shutil.copy(src_path, dest_path)
 
-    # Copy lidar scans
-    lidar_src_path = input_path / "lidar"
-    if lidar_src_path.exists():
-        shutil.copytree(lidar_src_path, output_path / "lidar")
+    if (input_path / "lidar").exists():
+        shutil.copytree(input_path / "lidar", output_path / "lidar")
 
     # Copy the calibration
     dest_path = output_path / "intrinsics.toml"
