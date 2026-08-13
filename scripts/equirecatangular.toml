@@ -1,0 +1,3 @@
+[[cameras]]
+model = "equirectangular"
+dimensions = { width = 1440, height = 720 }

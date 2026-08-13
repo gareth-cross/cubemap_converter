@@ -1,29 +1,40 @@
-# List of shader files:
-set(SHADER_FILES vertex.glsl fragment_display.glsl fragment_cubemap.glsl
-                 fragment_oversampled_cubemap.glsl)
+add_executable(generate_shader_header generate_shader_header.cc)
+target_compile_features(generate_shader_header PUBLIC cxx_std_20)
+if(MSVC)
+  target_compile_options(generate_shader_header PRIVATE /W4 /WX)
+else()
+  target_compile_options(generate_shader_header PRIVATE -Wall -Wextra -pedantic
+                                                        -Werror)
+endif()
+target_link_libraries(generate_shader_header CLI11::CLI11 fmt::fmt-header-only)
 
-# Iterate over all of them:
-foreach(shader_file ${SHADER_FILES})
-  # Split the extensions:
-  set(shader_file_path "${CMAKE_CURRENT_SOURCE_DIR}/${shader_file}")
-  get_filename_component(shader_name ${shader_file_path} NAME_WE)
-  message(STATUS "Discovered shader: ${shader_name}")
-
-  set(output_file "${CMAKE_CURRENT_BINARY_DIR}/shaders/${shader_name}.hpp")
-  list(APPEND SHADER_HEADER_FILES ${output_file})
-  add_custom_command(
-    OUTPUT ${output_file}
-    MAIN_DEPENDENCY ${shader_file_path}
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generate_shader_header.py"
-    COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/generate_shader_header.py --input
-            ${shader_file_path} --output ${output_file}
-    VERBATIM)
-endforeach()
-
-# Create a target for the shader codegen:
-add_custom_target(shaders_codegen DEPENDS ${SHADER_HEADER_FILES})
-
-# Create a target that exports the headers:
 add_library(shaders INTERFACE)
-add_dependencies(shaders shaders_codegen)
 target_include_directories(shaders INTERFACE ${CMAKE_CURRENT_BINARY_DIR})
+
+function(add_shader)
+  set(options "")
+  set(oneValueArgs "")
+  set(multiValueArgs SOURCE_FILE)
+  cmake_parse_arguments(ARGS "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
+
+  set(SHADER_FILE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/${ARGS_SOURCE_FILE}")
+  get_filename_component(SHADER_NAME ${SHADER_FILE_PATH} NAME_WE)
+  set(OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_NAME}.hpp")
+
+  add_custom_command(
+    OUTPUT ${OUTPUT_FILE}
+    COMMAND
+      "$<TARGET_FILE_DIR:generate_shader_header>/$<TARGET_FILE_NAME:generate_shader_header>"
+      --input ${SHADER_FILE_PATH} --output ${OUTPUT_FILE}
+    COMMENT "Generate shader header: ${SHADER_NAME}"
+    DEPENDS generate_shader_header ${SHADER_FILE_PATH})
+  set_source_files_properties(${OUTPUT_FILE} PROPERTIES GENERATED TRUE)
+
+  add_custom_target(${SHADER_NAME}_header DEPENDS ${OUTPUT_FILE})
+  add_dependencies(shaders ${SHADER_NAME}_header)
+endfunction()
+
+add_shader(SOURCE_FILE vertex.glsl)
+add_shader(SOURCE_FILE fragment_display.glsl)
+add_shader(SOURCE_FILE fragment_oversampled_cubemap.glsl)

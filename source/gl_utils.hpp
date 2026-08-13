@@ -16,7 +16,7 @@
 #pragma warning(pop)
 #endif
 
-#include "assertions.hpp"
+#include "assertions/assertions.hpp"
 #include "images.hpp"
 
 // A few simple utilities to manage OpenGL resources.
@@ -24,11 +24,8 @@ namespace gl_utils {
 
 // Simple "unique_ptr" imitation for use w/ OpenGL handles.
 struct OpenGLHandle {
-  // Construct w/ handle and deletion logic.
   // Could do something smarter than a function pointer, but this isn't performance critical.
-  OpenGLHandle(GLuint handle, void (*deleter)(GLuint) noexcept) : handle_(handle), deleter_(deleter) {
-    ASSERT(deleter_, "Cannot construct with null deleter");
-  }
+  OpenGLHandle(GLuint handle, void (*deleter)(GLuint) noexcept);
 
   // Cast to bool.
   explicit operator bool() const { return handle_ != 0; }

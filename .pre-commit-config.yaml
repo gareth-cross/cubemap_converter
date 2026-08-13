@@ -1,24 +1,30 @@
-# Don't run pre-commit on third party
 exclude: "^\
   (dependencies/.*)\
   "
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v2.3.0
+    rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
       - id: trailing-whitespace
+      - id: check-toml
+
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v15.0.7
+    rev: v19.1.2
     hooks:
       - id: clang-format
+
   - repo: https://github.com/cheshirekow/cmake-format-precommit
     rev: v0.6.13
     hooks:
       - id: cmake-format
-  - repo: https://github.com/psf/black
-    rev: 23.3.0
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.13
     hooks:
-      - id: black
-        exclude: '^dependencies/'
+      - id: ruff-format
+        types_or: [ python, pyi ]
+      - id: ruff-check
+        types_or: [ python, pyi ]
+        args: [ --fix ]

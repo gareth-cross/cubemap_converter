@@ -1,17 +1,14 @@
 """Kannala-Brandt fisheye camera model."""
-import numpy as np
-import typing as T
 
+import numpy as np
 from utils import create_grid
 
 
-def fisheye_distortion(
-    theta: np.ndarray, coeffs: np.ndarray
-) -> T.Tuple[np.ndarray, np.ndarray]:
+def fisheye_distortion(theta: np.ndarray, coeffs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Evaluate the Kannala-Brandt fisheye distortion curve (theta -> radius)."""
-    assert (
-        len(theta.shape) == 2 and theta.shape[-1] == 1
-    ), f"theta should be n x 1, got: {theta.shape}"
+    assert len(theta.shape) == 2 and theta.shape[-1] == 1, (
+        f"theta should be n x 1, got: {theta.shape}"
+    )
     assert coeffs.shape == (4,), f"coeffs should be 4-elements, got: {coeffs.shape}"
 
     poly_terms_even = np.concatenate(
@@ -33,16 +30,16 @@ def fisheye_distortion(
     r = poly_terms_odd @ coeffs_extended.reshape([5, 1])
 
     # Compute derivative wrt theta:
-    r_D_theta = poly_terms_even @ (
-        coeffs_extended * np.array([1.0, 3.0, 5.0, 7.0, 9.0])
-    ).reshape([5, 1])
+    r_D_theta = poly_terms_even @ (coeffs_extended * np.array([1.0, 3.0, 5.0, 7.0, 9.0])).reshape(
+        [5, 1]
+    )
 
     return r, r_D_theta
 
 
 def fisheye_invert_distortion(
     r: np.ndarray, coeffs: np.ndarray, max_iters: int = 10
-) -> T.Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Invert fisheye_distortion_poly with gauss newton solver."""
     assert max_iters > 0, f"max_iters = {max_iters}"
     assert len(r.shape) == 2 and r.shape[-1] == 1, f"r should be n x 1, got: {r.shape}"
@@ -57,7 +54,7 @@ def fisheye_invert_distortion(
     return theta, error
 
 
-def get_fisheye_coefficients() -> T.Tuple[np.ndarray, T.List[float]]:
+def get_fisheye_coefficients() -> tuple[np.ndarray, list[float]]:
     """Some representative testing coefficients."""
     coefficients = np.array(
         [
@@ -85,7 +82,7 @@ def get_fisheye_coefficients() -> T.Tuple[np.ndarray, T.List[float]]:
 def test_fisheye_distortion_curve():
     """Test radial distortion curve."""
     coefficients, max_radius = get_fisheye_coefficients()
-    for coeffs, max_r in zip(coefficients, max_radius):
+    for coeffs, max_r in zip(coefficients, max_radius, strict=False):
         r = np.linspace(0.0, max_r, 100).reshape([-1, 1])
         # radii -> theta
         theta, error = fisheye_invert_distortion(r=r, coeffs=coeffs)
@@ -102,9 +99,7 @@ def test_fisheye_distortion_curve():
             fisheye_distortion(theta=theta + dx, coeffs=coeffs)[0]
             - fisheye_distortion(theta=theta - dx, coeffs=coeffs)[0]
         ) / (dx * 2)
-        np.testing.assert_allclose(
-            r_D_theta_numerical, r_D_theta, rtol=0.0, atol=1.0e-6
-        )
+        np.testing.assert_allclose(r_D_theta_numerical, r_D_theta, rtol=0.0, atol=1.0e-6)
 
 
 def project_fisheye(p_cam: np.ndarray, K: np.ndarray, coeffs: np.ndarray):
@@ -132,19 +127,15 @@ def project_fisheye(p_cam: np.ndarray, K: np.ndarray, coeffs: np.ndarray):
     return p_native[:, (0, 1)]
 
 
-def unproject_fisheye(
-    p_native: np.ndarray, K: np.ndarray, coeffs: np.ndarray
-) -> np.ndarray:
+def unproject_fisheye(p_native: np.ndarray, K: np.ndarray, coeffs: np.ndarray) -> np.ndarray:
     """Inverse distortion model for fisheye."""
-    assert (
-        len(p_native.shape) == 2 and p_native.shape[-1] == 2
-    ), f"p_native should be N x 2, got: {p_native.shape}"
+    assert len(p_native.shape) == 2 and p_native.shape[-1] == 2, (
+        f"p_native should be N x 2, got: {p_native.shape}"
+    )
     assert K.shape == (3, 3), f"K should be 3x3, got: {K.shape}"
 
     # Convert pixel coordinates to the image plane:
-    p_native_homogenous = np.concatenate(
-        [p_native, np.ones_like(p_native[:, -1:])], axis=-1
-    )
+    p_native_homogenous = np.concatenate([p_native, np.ones_like(p_native[:, -1:])], axis=-1)
     p_img_homogenous = (np.linalg.inv(K) @ p_native_homogenous.transpose()).transpose()
 
     # Compute radius and angle:
@@ -178,7 +169,7 @@ def test_fisheye_model():
     pixel_coords = create_grid(*image_dims)
 
     # Test all the models:
-    for coeffs, max_r in zip(coefficients, max_radius):
+    for coeffs, max_r in zip(coefficients, max_radius, strict=False):
         # Pick a suitable focal length that satisfies our maximum radius.
         f = np.linalg.norm(image_dims) * 0.5 / max_r * 1.05
         K = np.array(

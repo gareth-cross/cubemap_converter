@@ -70,12 +70,10 @@ float InverseRangeFromInverseDepth(in float inv_depth_normalized, in vec3 v_face
   float inv_range_meters = inv_depth_meters * v_face.z;
 
   // Normalize it back into the range of [0 (infinity), 1 / ue_clip_plane].
-  // TODO: We could choose a new clip value here if we wanted to.
   float inv_range_normalized = min(inv_range_meters * ue_clip_plane_meters, 1.0f);
   return inv_range_normalized;
 }
 
-// TODO: This program might be a bit faster if split it into two shaders for RGB and range.
 void main() {
   // Lookup the unit vector:
   vec3 v_cam = normalize(texture(remap_table, TexCoords).xyz);
@@ -136,7 +134,7 @@ void main() {
       // float weighed_avg = v00 * (1.0f - weights.x) * (1.0f - weights.y) + v10 * weights.x * (1.0f - weights.y) +
       //                     v01 * (1.0f - weights.x) * weights.y + v11 * weights.x * weights.y;
 
-      // For now just take the max depth (ie. dilate any small structures)
+      // For now take the max depth (ie. dilate any small structures)
       float v_max = max(max(v00, v01), max(v10, v11));
 
       // Take the maximum inverse range (ie. closest object).

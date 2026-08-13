@@ -189,3 +189,7 @@ target/
 # =============
 wandb/*
 logs/*
+
+# pixi environments
+.pixi
+*.egg-info
